@@ -174,7 +174,6 @@ class Recorder:
 
                     self.count = 0
 
-                # print("PM1 Atmospheric concentration = " + str(self.concPM10_0_ATM) + " ug/m3")
                 if inputChecksum != self.payloadChecksum:
                     print("Warning! Checksums don't match!")
                     print("Calculated Checksum = " + str(inputChecksum))
