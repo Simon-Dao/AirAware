@@ -1,7 +1,5 @@
 import time
 
-import datetime
-import pytz as pytz
 import serial
 
 #from models import Particle
