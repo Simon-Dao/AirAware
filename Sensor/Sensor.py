@@ -3,7 +3,7 @@ import time
 import requests
 import json
 
-url = "http://44.247.151.69:5000/"
+baseURL = "http://44.247.151.69:5000/"
 def test():
     recorder = Recorder()
 
@@ -22,7 +22,7 @@ def test():
         # Send a request to the server
         data = {'PM10': concPM10_0_ATM, 'timestamp':time.time()}
 
-        response = requests.post(url, data=json.dumps(data),headers=headers)
+        response = requests.post(baseURL+"storePM10", json=data, headers=headers)
         if response.status_code == 201:
             new_item = response.json()
             print(new_item)

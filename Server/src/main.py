@@ -12,8 +12,9 @@ def PM10():
 @app.route('/storePM10', methods=['POST'])
 def PM10Store():
 
-    PM10 = request.headers.get('PM10')
-    timestamp = request.headers.get('timestamp')
+    data = request.get_json()
+    PM10 = data.get('PM10')
+    timestamp = data.get('timestamp')
 
     print(PM10, timestamp)
 
