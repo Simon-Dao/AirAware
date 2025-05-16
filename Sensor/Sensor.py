@@ -23,7 +23,7 @@ def test():
         data = {'PM10': concPM10_0_ATM, 'timestamp':time.time()}
 
         response = requests.post(baseURL+"storePM10", json=data, headers=headers)
-        if response.status_code == 201:
+        if response.status_code == 200:
             new_item = response.json()
             print(new_item)
         else:
