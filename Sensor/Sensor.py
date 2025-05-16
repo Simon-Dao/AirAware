@@ -3,19 +3,14 @@ import time
 import requests
 import json
 
-# URL for the server
-
-
-
+url = "http://44.247.151.69:5000/"
 def test():
     recorder = Recorder()
-    
+
     headers = {'Content-type': 'application/json'}
-    url = "http://44.247.151.69:5000/"  
-      
+
     while True:
-        
-        
+
         concPM10_0_ATM = recorder.PM10()
         
         # Ignore invalid sensor outputs
@@ -25,10 +20,15 @@ def test():
         print("PM1 Atmospheric concentration = " + str(concPM10_0_ATM) + " ug/m3")
 
         # Send a request to the server
-        data = {'PM10': concPM10_0_ATM, 'timestamp':''}
-        
-        response = requests.post(url, data=json.dumps(
-        
+        data = {'PM10': concPM10_0_ATM, 'timestamp':time.time()}
+
+        response = requests.post(url, data=json.dumps(data),headers=headers)
+        if response.status_code == 201:
+            new_item = response.json()
+            print(new_item)
+        else:
+            print(f"Error: {response.status_code}")
+
         time.sleep(0.7)
         
 print("testing")
