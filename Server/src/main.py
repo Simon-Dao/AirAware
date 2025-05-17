@@ -1,26 +1,24 @@
 import time
-
 from flask import Flask, jsonify, request
-import random
 
 app = Flask(__name__)
 
+current_data = {"PM10": -1, "timestamp": time.time()}
+
 @app.route('/', methods=['GET'])
 def PM10():
-    return jsonify({"PM10": random.randint(0,10), "timestamp":time.time()})
+    return jsonify(current_data)
 
 @app.route('/storePM10', methods=['POST'])
 def PM10Store():
-
     data = request.get_json()
     PM10 = data.get('PM10')
     timestamp = data.get('timestamp')
 
-    print(PM10, timestamp)
+    current_data["PM10"] = PM10
+    current_data["timestamp"] = timestamp
 
     return jsonify({"message": str(PM10) + " " + str(timestamp)})
-    # return jsonify({"status": 400, "message": "Error occured with request"})
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
