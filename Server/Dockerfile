@@ -3,6 +3,7 @@ FROM python:3
 WORKDIR /src
 
 RUN pip install flask
+RUN pip install cors-flask
 
 COPY . .
 
