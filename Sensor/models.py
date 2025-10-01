@@ -1,3 +1,6 @@
+#SECTION - This is a deprecated file, however, it may be useful later on when we 
+# integrate the model into the pipeline
+
 from django.db import models
 
 class BackupModel(models.Model):

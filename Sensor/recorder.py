@@ -1,6 +1,7 @@
-import time
+# Note, this code only returns the PM10 value, but the sensor
+# returns many other values that could be logged if needed
 
-import datetime
+import time
 import serial
 
 

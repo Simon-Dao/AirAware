@@ -3,7 +3,12 @@ import time
 import requests
 import json
 
-baseURL = "http://44.247.151.69:5000/"
+SERVER_PORT = 5000
+
+# The public IP address of the EC2 instance
+# This can be changed to localhost for local testing
+SERVER_URL = f"http://44.247.151.69:{SERVER_PORT}/"
+
 def test():
     recorder = Recorder()
 
@@ -22,7 +27,7 @@ def test():
         # Send a request to the server
         data = {'PM10': concPM10_0_ATM, 'timestamp':time.time()}
 
-        response = requests.post(baseURL+"storePM10", json=data, headers=headers)
+        response = requests.post(SERVER_URL+"storePM10", json=data, headers=headers)
         if response.status_code == 200:
             new_item = response.json()
             print(new_item)
