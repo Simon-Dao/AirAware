@@ -11,7 +11,7 @@ class Recorder:
     def __init__(self):
         self.physicalPort = '/dev/serial0'
 
-        self.serialPort = serial.Serial(self.physicalPort)  # open serial port
+        self.serialPort = serial.Serial(self.physicalPort, baudrate=9600)  # open serial port
 
         self.BIN_SIZE = 300
         self.lastbin = int(time.time())
@@ -58,10 +58,11 @@ class Recorder:
         self.count = 0.0
 
     def PM10(self) -> int:
-
+                
         # Check if we have enough data to read a payload
         if self.serialPort.in_waiting >= 32:
-
+            
+            print(self.serialPort.in_waiting)
             # Check that we are reading the payload from the correct place (i.e. the start bits)
             if ord(self.serialPort.read()) == 0x42 and ord(self.serialPort.read()) == 0x4d:
 
