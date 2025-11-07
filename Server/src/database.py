@@ -1,14 +1,22 @@
 import sqlite3, time
+import os
 
 class Database:
     
     def __init__(self):
-        self.db_path = "database.db"
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.db_path = os.path.join(base_dir, "database.db")
         self.createTables()
     
     def get_connection(self):
-        """Get a new database connection for each operation"""
-        return sqlite3.connect(self.db_path)
+        try:
+            """Get a new database connection for each operation"""
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA foreign_keys = ON")
+            print("Connection Successful!")
+            return conn
+        except Exception as e:
+            print(f"GET_CONNECTION FAILURE: {e}")
     
     def insertSensor(self, sensor_id):
         conn = self.get_connection()
@@ -16,6 +24,9 @@ class Database:
         try:
             cur.execute("INSERT OR IGNORE INTO sensor (id) VALUES (?)", (sensor_id,))
             conn.commit()
+        except Exception as e:
+        # 3. Catch *any* exception and print the detail
+            print(f"STATUS: COMMIT FAILED. An exception occurred: {type(e).__name__} - {e}")
         finally:
             conn.close()
 
