@@ -1,9 +1,14 @@
 // store/useColonyStore.ts
 import { create } from "zustand";
 
+type Tile = {
+  type: "none" | "tunnel" | "nesting_chamber" | "food_store";
+  completion: Date | null;
+};
+
 interface GameState {
   // --- Core State ---
-  map: string[] | null;
+  map: Tile[][];
 
   population: number;
   diggers: number;
@@ -17,7 +22,7 @@ interface GameState {
   lastUpdate: number;
 
   initialize: () => Promise<void>;
-  
+
   // --- Actions ---
   setState: (newState: any) => void;
   setAirQuality: (aqi: number) => void;
@@ -36,9 +41,31 @@ export async function getGameState(): Promise<GameState> {
   return res.json();
 }
 
+function initialMapState() {
+  let tempMap = [];
+
+  for (let i = 0; i < 66; i++) {
+    let row: Tile[] = [];
+    for (let j = 0; j < 73; j++) {
+      let tile: Tile = {
+        type: "none",
+        completion: null,
+      };
+
+      row.push(tile);
+    }
+    tempMap.push(row);
+  }
+
+  tempMap[0][0].type = "tunnel";
+  tempMap[0][1].type = "tunnel";
+
+  return tempMap;
+}
+
 export const useGameStore = create<GameState>((set, get) => ({
   // --- Initial State ---
-  map: null,
+  map: initialMapState(),
   population: 20,
   diggers: 10,
   foragers: 10,
@@ -52,13 +79,12 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   initialize: async () => {
     await new Promise((resolve) => setTimeout(resolve, 4000));
-
-    set({ map: [] });
+    // await set({ map: tempMap });
   },
 
   // --- Actions ---
-  setState: (newState : any) => {
-    set(newState)
+  setState: (newState: any) => {
+    set(newState);
   },
 
   setAirQuality: (aqi: number) => {

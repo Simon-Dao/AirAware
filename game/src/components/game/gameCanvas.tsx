@@ -1,15 +1,27 @@
 import { useEffect, useRef } from "react";
+import { useGameStore } from "../../state/gameState";
 
 function GameCanvas() {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  const camera = useRef({ x: 0, y: 0 });
+  const {map} = useGameStore(); 
+
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const WORLD_WIDTH = 2000;
+  const WORLD_HEIGHT = 2200;
+  const SURFACE_HEIGHT = 300;
+  const GRID_SIZE = 30;
+  const NUM_GRID_X = Math.floor(WORLD_WIDTH / GRID_SIZE); 
+  const NUM_GRID_Y = Math.floor(WORLD_HEIGHT / GRID_SIZE);
+
+  // if(map.length == 0 || map.length != NUM_GRID_Y || map[0].length != NUM_GRID_X ) {
+  //   return (
+  //     <h1>Error loading map</h1>
+  //   )
+  // } 
+
+  const camera = useRef({ x: WORLD_WIDTH / 2, y: 0 });
   const isDragging = useRef(false);
   const lastMouse = useRef({ x: 0, y: 0 });
-
-  const WORLD_WIDTH = 5000;
-  const WORLD_HEIGHT = 5000;
-  const GRID_SIZE = 100;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -33,11 +45,19 @@ function GameCanvas() {
     const draw = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      ctx.fillStyle = "white";
+      ctx.fillStyle = "#87CEEB";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       ctx.save();
       ctx.translate(-camera.current.x, -camera.current.y);
+
+      ctx.fillStyle = "#964B00";
+      ctx.fillRect(
+        0,
+        SURFACE_HEIGHT,
+        WORLD_WIDTH,
+        WORLD_HEIGHT - SURFACE_HEIGHT,
+      );
 
       ctx.strokeStyle = "#ddd";
 
@@ -47,22 +67,34 @@ function GameCanvas() {
       const startY = Math.floor(camera.current.y / GRID_SIZE) * GRID_SIZE;
       const endY = camera.current.y + canvas.height;
 
-      for (let x = startX; x < endX; x += GRID_SIZE) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, WORLD_HEIGHT);
-        ctx.stroke();
-      }
+      // Vertical grid lines (only below surface)
+      // for (let x = startX; x < endX; x += GRID_SIZE) {
+      //   ctx.beginPath();
+      //   ctx.moveTo(x, SURFACE_HEIGHT);
+      //   ctx.lineTo(x, WORLD_HEIGHT);
+      //   ctx.stroke();
+      // }
 
-      for (let y = startY; y < endY; y += GRID_SIZE) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(WORLD_WIDTH, y);
-        ctx.stroke();
-      }
+      // // Horizontal grid lines (only below surface)
+      // for (let y = startY; y < endY; y += GRID_SIZE) {
+      //   if (y < SURFACE_HEIGHT) continue;
 
-      ctx.strokeStyle = "black";
-      ctx.strokeRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+      //   ctx.beginPath();
+      //   ctx.moveTo(0, y);
+      //   ctx.lineTo(WORLD_WIDTH, y);
+      //   ctx.stroke();
+      // }
+
+      //draw entire canvas
+      for (let i = 0; i < 66; i++) {
+        for (let j = 0; j < NUM_GRID_X; j++) {
+          if(map[i][j].type == "none")
+            continue 
+
+          ctx.fillStyle = "#000000"
+          ctx.fillRect(j*GRID_SIZE, i*GRID_SIZE+SURFACE_HEIGHT, GRID_SIZE, GRID_SIZE)
+        }
+      }
 
       ctx.restore();
     };

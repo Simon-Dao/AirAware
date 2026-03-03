@@ -38,11 +38,11 @@ export const useSessionStore = create<SessionState>((set) => ({
   testLogin: async () => {
     console.log("test login");
     set({loggingIn: true})
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // await new Promise((resolve) => setTimeout(resolve, 500));
 
     set({ loggedIn: true, loggingIn: false });
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // await new Promise((resolve) => setTimeout(resolve, 500));
 
     set({ stateLoaded: true });
   },
@@ -51,7 +51,7 @@ export const useSessionStore = create<SessionState>((set) => ({
 
     console.log("state loaded req")
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // await new Promise((resolve) => setTimeout(resolve, 500));
 
     console.log("state loaded")
 
