@@ -9,15 +9,15 @@ function App() {
   const { stateLoaded } = useSessionStore();
 
   return (
-    <>
+    <div className="">
       {stateLoaded ? (
-        <div>Game!</div>
+        <Game/>
       ) : (
         <div>
           <Title />
         </div>
       )}
-    </>
+    </div>
   );
 }
 

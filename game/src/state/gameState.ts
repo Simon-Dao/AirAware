@@ -17,8 +17,9 @@ interface GameState {
   lastUpdate: number;
 
   initialize: () => Promise<void>;
-
+  
   // --- Actions ---
+  setState: (newState: any) => void;
   setAirQuality: (aqi: number) => void;
   allocateWorkers: (diggers: number, foragers: number) => void;
   tick: (deltaSeconds: number) => void;
@@ -56,6 +57,9 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   // --- Actions ---
+  setState: (newState : any) => {
+    set(newState)
+  },
 
   setAirQuality: (aqi: number) => {
     set({ airQuality: aqi });

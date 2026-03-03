@@ -6,23 +6,11 @@ function Title() {
     useSessionStore();
   const { initialize } = useGameStore();
 
-  const NotLoaded = () => (
-    <button
-      onClick={async () => {
-        await testLogin();
-        await initialize();
-        setStateLoaded();
-      }}
-    >
-      Login
-    </button>
-  );
-
   return (
-    <div className="">
+    <div className="w-screen h-screen flex items-center justify-center flex-col">
       <h1 className="bg-green">Game Title</h1>
 
-      {!loggedIn && !loggingIn &&
+      {!loggedIn && !loggingIn && (
         <button
           onClick={async () => {
             await testLogin();
@@ -32,17 +20,11 @@ function Title() {
         >
           Login
         </button>
-      }
+      )}
 
-			{
-				loggingIn &&
-				<button>Logging In...</button>
-			}
+      {loggingIn && <button>Logging In...</button>}
 
-			{
-				loggedIn && !stateLoaded &&
-				<button>Loading Game...</button> 
-			}
+      {loggedIn && !stateLoaded && <button>Loading Game...</button>}
     </div>
   );
 }
