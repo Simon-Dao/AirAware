@@ -6,22 +6,17 @@ import Title from "./components/title/title";
 import { useSessionStore } from "./state/sessionState";
 
 function App() {
-
   const { stateLoaded } = useSessionStore();
 
   return (
     <>
-      {
-        stateLoaded
-        ?
+      {stateLoadeduseGameStore ? (
+        <div>Game!</div>
+      ) : (
         <div>
-          Game!
+          <Title />
         </div>
-        : 
-        <div>
-        <Title />
-      </div>
-      }
+      )}
     </>
   );
 }
