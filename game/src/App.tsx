@@ -1,18 +1,29 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { useState } from "react";
+import "./App.css";
+import Dashboard from "./components/dashboard/dashboard";
+import Game from "./components/game/game";
+import Title from "./components/title/title";
+import { useSessionStore } from "./state/sessionState";
 
 function App() {
-  const [count, setCount] = useState(0)
+
+  const { stateLoaded } = useSessionStore();
 
   return (
     <>
-      <div>
-        Ants!
+      {
+        stateLoaded
+        ?
+        <div>
+          Game!
+        </div>
+        : 
+        <div>
+        <Title />
       </div>
+      }
     </>
-  )
+  );
 }
 
-export default App
+export default App;
