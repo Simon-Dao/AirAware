@@ -37,5 +37,17 @@ def PM10Store():
     
     return jsonify({"message": str(PM10) + " " + str(timestamp)})
 
+# Route used to add a new PM10 record
+@app.route('/save', methods=['POST'])
+def saveGame():
+    data = request.get_json()
+    PM10 = data.get('PM10')
+    sensor_id = data.get('sensor_id')
+    timestamp = data.get('timestamp')
+
+    database.insertSensorReading(sensor_id, PM10, timestamp)
+    
+    return jsonify({"message": str(PM10) + " " + str(timestamp)})
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

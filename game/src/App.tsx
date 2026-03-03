@@ -10,7 +10,7 @@ function App() {
 
   return (
     <>
-      {stateLoadeduseGameStore ? (
+      {stateLoaded ? (
         <div>Game!</div>
       ) : (
         <div>
