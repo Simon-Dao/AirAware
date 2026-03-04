@@ -13,12 +13,6 @@ function GameCanvas() {
   const NUM_GRID_X = Math.floor(WORLD_WIDTH / GRID_SIZE); 
   const NUM_GRID_Y = Math.floor(WORLD_HEIGHT / GRID_SIZE);
 
-  // if(map.length == 0 || map.length != NUM_GRID_Y || map[0].length != NUM_GRID_X ) {
-  //   return (
-  //     <h1>Error loading map</h1>
-  //   )
-  // } 
-
   const camera = useRef({ x: WORLD_WIDTH / 2, y: 0 });
   const isDragging = useRef(false);
   const lastMouse = useRef({ x: 0, y: 0 });

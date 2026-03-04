@@ -4,7 +4,7 @@ import { create } from "zustand";
 interface UIState {
   // --- Core State ---
   inBuildingMode: boolean;
-  buildingMode: "dig" | "place" | "none"
+  buildingMode: "dig" | "place" | "none";
 
   setUIState: (newState: any) => void
 }
