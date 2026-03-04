@@ -52,7 +52,7 @@ function Calendar() {
         >
           {"<"}
         </div>
-        <div className="flex-1 bg-red-300">{monthYear}</div>
+        <div className="flex-1">{monthYear}</div>
         <div
           className="flex-1 cursor-pointer select-none"
           onClick={handleNextMonth}

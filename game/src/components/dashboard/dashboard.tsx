@@ -10,7 +10,7 @@ type DashboardProps = {
 function Dashboard({ setDashboard }: DashboardProps) {
   return (
     <>
-      <div className="fixed top-0 left-0 w-screen h-screen flex items-start bg-[#242424]">
+      <div className="z-50 fixed top-0 left-0 w-screen h-screen flex items-start bg-[#242424]">
         <nav className="p-4 flex flex-col h-full min-w-[260px] bg-[#1f1f1f] border-r border-neutral-700">
           {/* Close */}
           <button
@@ -68,17 +68,22 @@ function Dashboard({ setDashboard }: DashboardProps) {
           </button>
         </nav>
 
-        <main className="h-full flex-1 flex bg-green-400">
+        <main className="h-full flex-1 flex">
           <div className="w-1/2 h-full flex flex-col">
             <div className="h-full card">
+              <h2>Streak Calendar</h2>
               <Calendar />
             </div>
             <div className="h-full card">
+              <h2>Daily AQ Timeline</h2>
               <Timeline />
             </div>
           </div>
           <div className="w-1/2 h-[98.5%] card">
-            <Map />
+            <h2>AQ Map</h2>
+            <div className="w-full h-[calc(100%-2.5rem)]">
+              <Map />
+            </div>
           </div>
         </main>
       </div>

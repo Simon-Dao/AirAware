@@ -46,7 +46,7 @@ function initialMapState() {
 
   for (let i = 0; i < 66; i++) {
     let row: Tile[] = [];
-    for (let j = 0; j < 73; j++) {
+    for (let j = 0; j < 100; j++) {
       let tile: Tile = {
         type: "none",
         completion: null,
