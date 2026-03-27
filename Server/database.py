@@ -9,14 +9,17 @@ class Database:
     
     def get_connection(self):
         return sqlite3.connect(self.db_path)
-
-    def _fetch(self, query, params=()):
-        """Helper for SELECT queries, returns list of dicts"""
+    
+    def _fetch(self, query, params=(), one=False):
+        """Helper for SELECT queries, returns list of dicts or single dict if one=True"""
         conn = self.get_connection()
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         try:
             cur.execute(query, params)
+            if one:
+                row = cur.fetchone()
+                return dict(row) if row else None
             return [dict(row) for row in cur.fetchall()]
         finally:
             conn.close()
@@ -73,18 +76,27 @@ class Database:
     def retrieve_game_state(self, username):
         colony = self._fetch(
             "SELECT * FROM colony WHERE username = ?",
-            (username,)
+            (username,),
+            one=True
         )
         if not colony:
             return None
         
-        colony = colony[0]
         populations = self._fetch(
-            "SELECT ant_type_id, population FROM colony_population WHERE colony_id = ?",
-            (colony['id'],)
+            "SELECT * FROM colony_population WHERE colony_id = ?",
+            (colony['id'],),
+            one=True
         )
-        colony['populations'] = populations
-        return colony
+
+        ant_types = self._fetch(
+            "SELECT * FROM ant_type",
+        )
+        
+        result = {}
+        result['colony'] = colony
+        result['populations'] = populations
+        result['any_types'] = ant_types
+        return result
 
     def close(self):
         pass

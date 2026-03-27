@@ -146,7 +146,7 @@ def session_login():
 
     return jsonify({"success": True})
 
-@app.route('/session/logout', methods=['POST'])
+@app.route('/session/logout(depreciated)', methods=['POST'])
 def session_logout():
     """
     User logout
@@ -176,7 +176,10 @@ def get_game_state():
         description: Game state data
     """
     username = request.args.get("username")
-    return jsonify({"message": ""})
+
+    game_state = database.retrieve_game_state(username)
+
+    return jsonify(game_state)
 
 @app.route('/game/save/data', methods=['POST'])
 def save_game_state():

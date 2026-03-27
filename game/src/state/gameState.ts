@@ -21,7 +21,7 @@ interface GameState {
   airQuality: number;
   lastUpdate: number;
 
-  initialize: () => Promise<void>;
+  loadGame: () => Promise<void>;
 
   // --- Actions ---
   setState: (newState: any) => void;
@@ -77,9 +77,10 @@ export const useGameStore = create<GameState>((set, get) => ({
   airQuality: 75,
   lastUpdate: Date.now(),
 
-  initialize: async () => {
-    await new Promise((resolve) => setTimeout(resolve, 4000));
-    // await set({ map: tempMap });
+  loadGame: async () => {
+    // await new Promise((resolve) => setTimeout(resolve, 4000));
+
+    await set({ map: tempMap });
   },
 
   // --- Actions ---

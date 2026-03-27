@@ -11,7 +11,7 @@ function Title() {
     attemptSignup,
     setStateLoaded,
   } = useSessionStore();
-  const { initialize } = useGameStore();
+  const { loadGame } = useGameStore();
 
   const [loginInput, setLoginInput] = useState<string>("");
   const [signupInput, setSignupInput] = useState<string>("");
@@ -25,8 +25,8 @@ function Title() {
           setErrorText("");
           try {
             await attemptLogin(loginInput);
-            // await initialize();
-            // setStateLoaded();
+            await loadGame();
+            setStateLoaded();
           } catch (e: any) {
             setErrorText(e?.message ?? String(e));
           }
@@ -53,10 +53,7 @@ function Title() {
           e.preventDefault();
           setErrorText("");
           try {
-            // await testLogin(loginInput);
             await attemptSignup(signupInput);
-            // await initialize();
-            // setStateLoaded();
           } catch (e: any) {
             setErrorText(e?.message ?? String(e));
           }

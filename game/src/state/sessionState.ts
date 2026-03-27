@@ -46,12 +46,6 @@ export const useSessionStore = create<SessionState>((set) => ({
     if(!response.data.success) {
       throw new Error("User already exists")
     }
-
-    // set({ loggedIn: true, loggingIn: false });
-
-    // await new Promise((resolve) => setTimeout(resolve, 500));
-
-    // set({ stateLoaded: true });
   },
 
   attemptLogin: async (loginInput: string) => {
@@ -68,18 +62,9 @@ export const useSessionStore = create<SessionState>((set) => ({
 
     set({ loggedIn: true, loggingIn: false });
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
-
-    set({ stateLoaded: true });
   },
 
   setStateLoaded: async () => {
-    console.log("state loaded req");
-
-    // await new Promise((resolve) => setTimeout(resolve, 500));
-
-    console.log("state loaded");
-
     set({ stateLoaded: true });
   },
 
