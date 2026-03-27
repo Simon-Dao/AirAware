@@ -1,5 +1,7 @@
 // store/useColonyStore.ts
 import { create } from "zustand";
+import axios from "axios";
+import { SERVER_BASE_URL } from "./constants";
 
 interface SessionState {
   loggedIn: boolean;
@@ -9,7 +11,8 @@ interface SessionState {
   curScreen: "title" | "game";
   goToGame: () => void;
   goToTitle: () => void;
-  testLogin: () => Promise<void>;
+  attemptSignup: (signupInput: string) => Promise<void>;
+  attemptLogin: (loginInput: string) => Promise<void>;
   setLoggingIn: (value: boolean) => void;
   setStateLoaded: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
@@ -35,32 +38,53 @@ export const useSessionStore = create<SessionState>((set) => ({
     });
   },
 
-  testLogin: async () => {
-    console.log("test login");
-    set({loggingIn: true})
+  attemptSignup: async (signupInput: string) => {
+    
+    const path = "user/init"
+    const response = await axios.post(SERVER_BASE_URL + path, {username:signupInput});
+    
+    if(!response.data.success) {
+      throw new Error("User already exists")
+    }
+
+    // set({ loggedIn: true, loggingIn: false });
+
     // await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // set({ stateLoaded: true });
+  },
+
+  attemptLogin: async (loginInput: string) => {
+    set({ loggingIn: true });
+    
+    // await new Promise((resolve) => setTimeout(resolve, 500));
+    const path = "session/login"
+    const response = await axios.post(SERVER_BASE_URL + path, {username:loginInput});
+    set({ loggingIn: false });
+    
+    if(!response.data.success) {
+      throw new Error("User doesn't exist")
+    }
 
     set({ loggedIn: true, loggingIn: false });
 
-    // await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
     set({ stateLoaded: true });
   },
 
   setStateLoaded: async () => {
-
-    console.log("state loaded req")
+    console.log("state loaded req");
 
     // await new Promise((resolve) => setTimeout(resolve, 500));
 
-    console.log("state loaded")
+    console.log("state loaded");
 
     set({ stateLoaded: true });
   },
 
   setLoggingIn: (value: boolean) => {
-
-    set({loggingIn: value});
+    set({ loggingIn: value });
   },
 
   login: async (username: string, password: string) => {

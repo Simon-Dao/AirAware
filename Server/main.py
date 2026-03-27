@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flasgger import Swagger
 from database import Database
+from datetime import datetime, timezone
 
 app = Flask(__name__)
 CORS(app)
@@ -22,23 +23,76 @@ def test():
     return jsonify({"message": "Server is running"})
 
 @app.route('/user/get/data', methods=['GET'])
-def PM():
+def pm_get():
     """
     Get current PM data
     ---
+    parameters:
+      - in: query
+        name: username
+        type: string
+        required: true
+      - in: query
+        name: begin_time
+        type: string
+        format: YYYY-MM-DD HH:MM:SS.mmmmmm
+        required: true
+      - in: query
+        name: end_time
+        type: string
+        format: YYYY-MM-DD HH:MM:SS.mmmmmm
+        required: false
     tags:
       - User
     responses:
       200:
         description: PM data
     """
+    username = request.args.get("username")
+    begin_time = request.args.get("begin_time")
+    #uses ISO 8601 date standard
+    end_time = request.args.get("end_time", datetime.now(timezone.utc).isoformat())
 
-    #get data from testing
+    return jsonify(database.get_readings(username,begin_time, end_time))
 
-    return jsonify({"pm": "this is a test"})
+@app.route('/user/add/data', methods=['POST'])
+def pm_store():
+    """
+    Store a PM user reading
+    ---
+    tags:
+      - User
+    parameters:
+      - in: body
+        name: body
+        schema:
+          type: object
+          properties:
+            username:
+              type: string
+            pm:
+              type: number
+            timestamp:
+              type: string
+            longitude:
+              type: number
+            latitude:
+              type: number
+    responses:
+      200:
+        description: PM reading stored
+    """
+    data = request.get_json()
+    username = data.get('username')
+    pm = data.get('pm')
+    timestamp = data.get('timestamp')
+    longitude = data.get('longitude')
+    latitude = data.get('latitude')
+    database.insert_user_reading(username, pm, timestamp, longitude, latitude)
+    return jsonify({"message": str(username) + " added:" + " " + str(pm) + " " + str(timestamp) + " " + str(latitude) + " " + str(longitude)})
 
 @app.route('/user/init', methods=['POST'])
-def initUser():
+def init_user():
     """
     Initialize a user
     ---
@@ -57,42 +111,17 @@ def initUser():
         description: user initialized
     """
     data = request.get_json()
-    user_id = data.get('user_id')
-    database.insertuser(user_id)
-    return jsonify({"message": "User initialized", "user_id": user_id})
+    username = data.get('username')
 
-@app.route('/user/add/data', methods=['POST'])
-def PMStore():
-    """
-    Store a PM user reading
-    ---
-    tags:
-      - User
-    parameters:
-      - in: body
-        name: body
-        schema:
-          type: object
-          properties:
-            user_id:
-              type: string
-            PM:
-              type: number
-            timestamp:
-              type: string
-    responses:
-      200:
-        description: PM reading stored
-    """
-    data = request.get_json()
-    PM = data.get('PM')
-    user_id = data.get('user_id')
-    timestamp = data.get('timestamp')
-    database.insertuserReading(user_id, PM, timestamp)
-    return jsonify({"message": str(PM) + " " + str(timestamp)})
+    if database.user_exists(username):
+        return jsonify({"success": False})
+
+    database.insert_user(username)
+    return jsonify({"success": True})
+
 
 @app.route('/session/login', methods=['POST'])
-def sessionLogin():
+def session_login():
     """
     User login
     ---
@@ -112,10 +141,13 @@ def sessionLogin():
     """
     data = request.get_json()
     username = data.get("username")
-    return jsonify({"message": ""})
+    if not database.user_exists(username):
+      return jsonify({"success": False})  
+
+    return jsonify({"success": True})
 
 @app.route('/session/logout', methods=['POST'])
-def sessionLogout():
+def session_logout():
     """
     User logout
     ---
@@ -129,7 +161,7 @@ def sessionLogout():
     return jsonify({"message": ""})
 
 @app.route('/game/get/data', methods=['GET'])
-def getGameState():
+def get_game_state():
     """
     Get game state
     ---
@@ -147,7 +179,7 @@ def getGameState():
     return jsonify({"message": ""})
 
 @app.route('/game/save/data', methods=['POST'])
-def saveGameState():
+def save_game_state():
     """
     Save game state
     ---

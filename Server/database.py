@@ -1,80 +1,103 @@
 import sqlite3, time
+from datetime import datetime, timezone
 
 class Database:
     
     def __init__(self):
         self.db_path = "database.db"
-        self.createTables()
+        self.create_tables()
     
     def get_connection(self):
-        """Get a new database connection for each operation"""
         return sqlite3.connect(self.db_path)
-    
-    def userExists(self, username):
+
+    def _fetch(self, query, params=()):
+        """Helper for SELECT queries, returns list of dicts"""
         conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         try:
-            cur.execute("SELECT COUNT(*) FROM user WHERE user.username = "+username, (username,))
-            rows = cur.fetchall()
+            cur.execute(query, params)
+            return [dict(row) for row in cur.fetchall()]
         finally:
             conn.close()
 
-    def insertUser(self, username):
+    def _execute(self, query, params=()):
+        """Helper for INSERT/UPDATE/DELETE queries"""
         conn = self.get_connection()
         cur = conn.cursor()
         try:
-            cur.execute("INSERT OR IGNORE INTO user (username) VALUES (?)", (username,))
+            cur.execute(query, params)
             conn.commit()
         finally:
             conn.close()
 
-    def insertSensorReading(self, username, pm, timestamp):
-        conn = self.get_connection()
-        cur = conn.cursor()
-        try:
-            cur.execute("INSERT INTO sensor_reading (username, pm, timestamp) VALUES (?, ?, ?)", (username, pm, timestamp))
-            conn.commit()
-        finally:
-            conn.close()
+    def get_readings(self, username, begin_time, end_time=datetime.now(timezone.utc).isoformat()):
 
-    #saves the map, food_amount, aq, and populations
-    def saveGameState(self, username, map, food_amount, aq, populations):
-        conn = self.get_connection()
-        cur = conn.cursor()
-        try:
-            cur.execute("INSERT INTO sensor_reading (sensor_fk, pm, timestamp) VALUES (?, ?, ?)", (username, pm, timestamp))
-            conn.commit()
-        finally:
-            conn.close()
+        return self._fetch(
+            "SELECT * FROM sensor_reading WHERE username=? AND (timestamp BETWEEN ? AND ?)",
+            (username, begin_time, end_time)
+        )
 
-    #retrieves the map, food_amount, aq, and populations
-    def retrieveGameState(self, username):
-        conn = self.get_connection()
-        cur = conn.cursor()
-        try:
-            cur.execute("INSERT INTO sensor_reading (username, pm, timestamp) VALUES (?, ?, ?)", (username, pm, timestamp))
-            conn.commit()
-        finally:
-            conn.close()
+    def user_exists(self, username):
+        rows = self._fetch(
+            "SELECT COUNT(*) as count FROM user WHERE username = ?",
+            (username,)
+        )
+        return rows[0]['count'] > 0
+
+    def insert_user(self, username):
+        self._execute(
+            "INSERT OR IGNORE INTO user (username) VALUES (?)",
+            (username,)
+        )
+
+    def insert_user_reading(self, username, pm, timestamp, longitude, latitude):
+        self._execute(
+            "INSERT INTO sensor_reading (username, pm, timestamp, longitude, latitude) VALUES (?, ?, ?, ?, ?)",
+            (username, pm, timestamp, longitude, latitude)
+        )
+
+    def save_game_state(self, username, map, food_amount, aq, populations):
+        self._execute(
+            "INSERT OR REPLACE INTO colony (username, map, food_amount, aq_level) VALUES (?, ?, ?, ?)",
+            (username, map, food_amount, aq)
+        )
+        colony = self._fetch("SELECT id FROM colony WHERE username = ?", (username,))
+        colony_id = colony[0]['id']
+        for ant_type_id, population in populations.items():
+            self._execute(
+                "INSERT OR REPLACE INTO colony_population (colony_id, ant_type_id, population) VALUES (?, ?, ?)",
+                (colony_id, ant_type_id, population)
+            )
+
+    def retrieve_game_state(self, username):
+        colony = self._fetch(
+            "SELECT * FROM colony WHERE username = ?",
+            (username,)
+        )
+        if not colony:
+            return None
+        
+        colony = colony[0]
+        populations = self._fetch(
+            "SELECT ant_type_id, population FROM colony_population WHERE colony_id = ?",
+            (colony['id'],)
+        )
+        colony['populations'] = populations
+        return colony
 
     def close(self):
-        # This method is now less critical but kept for compatibility
         pass
-    
-    def createTables(self, clear=False):
 
+    def create_tables(self, clear=False):
         conn = self.get_connection()
         cur = conn.cursor()
-
         try:
-            #clear all tables
             if clear:
                 tables = ["user", "sensor_reading", "colony", "ant_type", "colony_population"]
-
                 for table in tables:
                     cur.execute(f"DROP TABLE IF EXISTS {table}")
 
-            # Create tables
             cur.execute("PRAGMA foreign_keys = ON;")
             cur.execute("""
             CREATE TABLE IF NOT EXISTS user (
@@ -87,8 +110,8 @@ class Database:
                 username INTEGER NOT NULL,
                 pm REAL NOT NULL,
                 timestamp INTEGER NOT NULL,
-                longitude REAL,
-                latitude REAL,
+                longitude REAL NOT NULL,
+                latitude REAL NOT NULL,
                 FOREIGN KEY(username) REFERENCES user(username) ON DELETE CASCADE
             )""")
 
