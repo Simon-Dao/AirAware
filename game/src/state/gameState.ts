@@ -1,32 +1,48 @@
 // store/useColonyStore.ts
+import axios from "axios";
 import { create } from "zustand";
+import { SERVER_BASE_URL } from "./constants";
 
 type Tile = {
   type: "none" | "tunnel" | "nesting_chamber" | "food_store";
   completion: Date | null;
 };
 
+type AntType = {
+  name: string;
+  foraging: number;
+  mining: number;
+  hunger_cost: number;
+  attack: number;
+};
+
+type PopulationRecord = {
+  antType: AntType;
+  population: number;
+};
+
 interface GameState {
   // --- Core State ---
-  map: Tile[][];
 
-  population: number;
-  diggers: number;
-  foragers: number;
+  //basically a more space efficient 2d array
+  map: Record<number, Record<number, Tile>>;
 
-  food: number;
-  tunnelSize: number;
-  efficiency: number;
+  population: PopulationRecord[];
+
+  foodAmount: number;
 
   airQuality: number;
   lastUpdate: number;
 
-  loadGame: () => Promise<void>;
+  loadGame: (username: string) => Promise<void>;
 
   // --- Actions ---
-  setState: (newState: any) => void;
   setAirQuality: (aqi: number) => void;
-  allocateWorkers: (diggers: number, foragers: number) => void;
+  getAttackRate: () => number;
+  getMiningRate: () => number;
+  getForagingRate: () => number;
+  getHungerRate: () => number;
+  getTotalPopulation: () => number;
   tick: (deltaSeconds: number) => void;
   saveTimestamp: () => void;
 }
@@ -42,95 +58,54 @@ export async function getGameState(): Promise<GameState> {
 }
 
 function initialMapState() {
-  let tempMap = [];
-
-  for (let i = 0; i < 66; i++) {
-    let row: Tile[] = [];
-    for (let j = 0; j < 100; j++) {
-      let tile: Tile = {
-        type: "none",
-        completion: null,
-      };
-
-      row.push(tile);
-    }
-    tempMap.push(row);
-  }
-
-  tempMap[0][0].type = "tunnel";
-  tempMap[0][1].type = "tunnel";
-
-  return tempMap;
+  return {} as Record<number, Record<number, Tile>>;
 }
 
 export const useGameStore = create<GameState>((set, get) => ({
   // --- Initial State ---
   map: initialMapState(),
-  population: 20,
-  diggers: 10,
-  foragers: 10,
+  population: [],
 
-  food: 100,
-  tunnelSize: 50,
-  efficiency: 1,
-
-  airQuality: 75,
+  foodAmount: 0,
+  airQuality: 0,
   lastUpdate: Date.now(),
 
-  loadGame: async () => {
+  loadGame: async (username: string) => {
     // await new Promise((resolve) => setTimeout(resolve, 4000));
+    const res = await axios.get(SERVER_BASE_URL + "game/get/data", {
+      params: { username },
+    });
 
-    await set({ map: tempMap });
+    console.log(res);
+
+    await set({});
   },
 
   // --- Actions ---
-  setState: (newState: any) => {
-    set(newState);
-  },
 
   setAirQuality: (aqi: number) => {
     set({ airQuality: aqi });
   },
 
-  allocateWorkers: (diggers: number, foragers: number) => {
-    const { population } = get();
-
-    if (diggers + foragers <= population) {
-      set({ diggers, foragers });
-    }
+  tick: (deltaSeconds: number) => {
+    set({});
   },
 
-  tick: (deltaSeconds: number) => {
-    const state = get();
+  getAttackRate: () => {
+    return 0;
+  },
+  getMiningRate: () => {
+    return 0;
+  },
+  getForagingRate: () => {
+    return 0;
+  },
+  getHungerRate: () => {
+    return 0;
+  },
 
-    const airModifier = state.airQuality > 70 ? 1.2 : 0.8;
-
-    const digRate = state.diggers * 0.3 * airModifier * state.efficiency;
-
-    const foodRate = state.foragers * 0.4 * airModifier * state.efficiency;
-
-    const newFood =
-      state.food +
-      foodRate * deltaSeconds -
-      state.population * 0.1 * deltaSeconds;
-
-    const newTunnel = state.tunnelSize + digRate * deltaSeconds;
-
-    let newPopulation = state.population;
-
-    if (newFood > 150) {
-      newPopulation += 0.05 * deltaSeconds;
-    }
-
-    if (newFood < 0) {
-      newPopulation -= 0.05 * deltaSeconds;
-    }
-
-    set({
-      food: Math.max(0, newFood),
-      tunnelSize: newTunnel,
-      population: Math.max(1, newPopulation),
-    });
+  getTotalPopulation: () => {
+    return 0;
   },
 
   saveTimestamp: () => {

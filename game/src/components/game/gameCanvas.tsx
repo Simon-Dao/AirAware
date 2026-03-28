@@ -77,8 +77,7 @@ function GameCanvas({ zoom }: GameCanvasProps) {
 
       for (let i = 0; i < 66; i++) {
         for (let j = 0; j < NUM_GRID_X; j++) {
-          if (map[i][j].type === "none") continue;
-
+          if (map[i]?.[j] !== undefined) continue;
           const depth = i / 66;
           const shade = Math.floor(160 - depth * 100);
 

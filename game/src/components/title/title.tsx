@@ -4,6 +4,7 @@ import { useState } from "react";
 
 function Title() {
   const {
+    username,
     loggedIn,
     loggingIn,
     stateLoaded,
@@ -25,7 +26,7 @@ function Title() {
           setErrorText("");
           try {
             await attemptLogin(loginInput);
-            await loadGame();
+            await loadGame(loginInput);
             setStateLoaded();
           } catch (e: any) {
             setErrorText(e?.message ?? String(e));

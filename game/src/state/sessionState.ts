@@ -60,7 +60,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       throw new Error("User doesn't exist")
     }
 
-    set({ loggedIn: true, loggingIn: false });
+    set({ loggedIn: true, loggingIn: false, username: loginInput});
 
   },
 

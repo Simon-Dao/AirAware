@@ -53,6 +53,10 @@ class Database:
             "INSERT OR IGNORE INTO user (username) VALUES (?)",
             (username,)
         )
+        self._execute(
+            "INSERT OR IGNORE INTO colony (username,air_quality,food_amount,map) VALUES (?,?,?,?)",
+            (username,0,0,"{}")
+        )
 
     def insert_user_reading(self, username, pm, timestamp, longitude, latitude):
         self._execute(
@@ -62,7 +66,7 @@ class Database:
 
     def save_game_state(self, username, map, food_amount, aq, populations):
         self._execute(
-            "INSERT OR REPLACE INTO colony (username, map, food_amount, aq_level) VALUES (?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO colony (username, map, food_amount, air_quality) VALUES (?, ?, ?, ?)",
             (username, map, food_amount, aq)
         )
         colony = self._fetch("SELECT id FROM colony WHERE username = ?", (username,))
@@ -79,13 +83,14 @@ class Database:
             (username,),
             one=True
         )
+
+
         if not colony:
             return None
-        
+
         populations = self._fetch(
             "SELECT * FROM colony_population WHERE colony_id = ?",
-            (colony['id'],),
-            one=True
+            (colony['id'],)
         )
 
         ant_types = self._fetch(
@@ -96,6 +101,7 @@ class Database:
         result['colony'] = colony
         result['populations'] = populations
         result['any_types'] = ant_types
+
         return result
 
     def close(self):
@@ -131,7 +137,7 @@ class Database:
             CREATE TABLE IF NOT EXISTS colony (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username INTEGER NOT NULL UNIQUE,
-                aq_level INTEGER NOT NULL DEFAULT 0,
+                air_quality INTEGER NOT NULL DEFAULT 0,
                 food_amount INTEGER NOT NULL DEFAULT 0,
                 map TEXT NOT NULL,
                 FOREIGN KEY(username) REFERENCES user(username) ON DELETE CASCADE

@@ -177,9 +177,10 @@ def get_game_state():
     """
     username = request.args.get("username")
 
+    print(username,"asdasd")
     game_state = database.retrieve_game_state(username)
 
-    return jsonify(game_state)
+    return jsonify({"state": game_state })
 
 @app.route('/game/save/data', methods=['POST'])
 def save_game_state():
