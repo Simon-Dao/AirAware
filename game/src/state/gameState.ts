@@ -35,6 +35,7 @@ interface GameState {
   lastUpdate: number;
 
   loadGame: (username: string) => Promise<void>;
+  saveGame: (username: string) => Promise<void>;
 
   // --- Actions ---
   setAirQuality: (aqi: number) => void;
@@ -45,16 +46,6 @@ interface GameState {
   getTotalPopulation: () => number;
   tick: (deltaSeconds: number) => void;
   saveTimestamp: () => void;
-}
-
-export async function getGameState(): Promise<GameState> {
-  const res = await fetch("/api/game-state");
-
-  if (!res.ok) {
-    throw new Error("Failed to fetch game state");
-  }
-
-  return res.json();
 }
 
 function initialMapState() {
@@ -79,6 +70,20 @@ export const useGameStore = create<GameState>((set, get) => ({
     console.log(res);
 
     await set({});
+  },
+
+  saveGame: async (username: string) => {
+    const { map, population, foodAmount, airQuality, lastUpdate } = get();
+
+    await axios.post(SERVER_BASE_URL + "game/save/data", {
+      username,
+      map: JSON.stringify(map),
+      population,
+      // foodAmount,
+      foodAmount:14,
+      airQuality,
+      lastUpdate,
+    });
   },
 
   // --- Actions ---

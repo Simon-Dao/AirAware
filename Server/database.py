@@ -64,17 +64,25 @@ class Database:
             (username, pm, timestamp, longitude, latitude)
         )
 
-    def save_game_state(self, username, map, food_amount, aq, populations):
+    def save_game_state(self, username, map, food_amount, aq, populations, last_update=None):
         self._execute(
             "INSERT OR REPLACE INTO colony (username, map, food_amount, air_quality) VALUES (?, ?, ?, ?)",
             (username, map, food_amount, aq)
         )
         colony = self._fetch("SELECT id FROM colony WHERE username = ?", (username,))
         colony_id = colony[0]['id']
-        for ant_type_id, population in populations.items():
+
+        # clear old population records before reinserting
+        self._execute("DELETE FROM colony_population WHERE colony_id = ?", (colony_id,))
+
+        for record in populations:
+            ant_type_name = record['antType']['name']
+            population_count = record['population']
+            ant_type = self._fetch("SELECT id FROM ant_type WHERE name = ?", (ant_type_name,))
+            ant_type_id = ant_type[0]['id']
             self._execute(
-                "INSERT OR REPLACE INTO colony_population (colony_id, ant_type_id, population) VALUES (?, ?, ?)",
-                (colony_id, ant_type_id, population)
+                "INSERT INTO colony_population (colony_id, ant_type_id, population) VALUES (?, ?, ?)",
+                (colony_id, ant_type_id, population_count)
             )
 
     def retrieve_game_state(self, username):
@@ -134,14 +142,16 @@ class Database:
             )""")
 
             cur.execute("""
-            CREATE TABLE IF NOT EXISTS colony (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username INTEGER NOT NULL UNIQUE,
-                air_quality INTEGER NOT NULL DEFAULT 0,
-                food_amount INTEGER NOT NULL DEFAULT 0,
-                map TEXT NOT NULL,
-                FOREIGN KEY(username) REFERENCES user(username) ON DELETE CASCADE
-            )""")
+                CREATE TABLE IF NOT EXISTS colony (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL UNIQUE,
+                    air_quality INTEGER NOT NULL DEFAULT 0,
+                    food_amount INTEGER NOT NULL DEFAULT 0,
+                    map TEXT NOT NULL DEFAULT '{}',
+                    last_update INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY(username) REFERENCES user(username) ON DELETE CASCADE
+                )
+            """)
 
             cur.execute("""
             CREATE TABLE IF NOT EXISTS ant_type (

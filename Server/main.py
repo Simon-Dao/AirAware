@@ -187,6 +187,24 @@ def save_game_state():
     """
     Save game state
     ---
+    parameters:
+      - in: body
+        name: body
+        schema:
+          type: object
+          properties:
+            username:
+              type: string
+            map:
+              type: string
+            foodAmount:
+              type: number
+            airQuality:
+              type: number
+            populations:
+              type: array
+            lastUpdate:
+              type: number
     tags:
       - Game
     responses:
@@ -194,7 +212,15 @@ def save_game_state():
         description: Game state saved
     """
     data = request.get_json()
-    return jsonify({"message": ""})
+    username = data.get('username')
+    map = data.get('map')
+    food_amount = data.get('foodAmount')
+    air_quality = data.get('airQuality')
+    populations = data.get('population')
+    last_update = data.get('lastUpdate')
+
+    database.save_game_state(username, map, food_amount, air_quality, populations, last_update)
+    return jsonify({"success": True})
 
 if __name__ == '__main__':
     app.run(debug=True)
