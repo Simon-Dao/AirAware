@@ -108,7 +108,7 @@ class Database:
         result = {}
         result['colony'] = colony
         result['populations'] = populations
-        result['any_types'] = ant_types
+        result['ant_types'] = ant_types
 
         return result
 

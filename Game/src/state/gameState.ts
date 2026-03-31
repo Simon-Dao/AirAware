@@ -26,7 +26,8 @@ interface GameState {
 
   //basically a more space efficient 2d array
   map: Record<number, Record<number, Tile>>;
-
+  
+  username: string;
   population: PopulationRecord[];
 
   foodAmount: number;
@@ -56,6 +57,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   // --- Initial State ---
   map: initialMapState(),
   population: [],
+  username: "",
 
   foodAmount: 0,
   airQuality: 0,
@@ -67,23 +69,25 @@ export const useGameStore = create<GameState>((set, get) => ({
       params: { username },
     });
 
-    console.log(res);
+    const x = res.data.state;
+    const colony = x.colony;
 
-    await set({});
+    await set({population: x.ant_types, foodAmount:colony.foodAmount, airQuality: colony.airQuality, lastUpdate: colony.last_update});
   },
 
   saveGame: async (username: string) => {
     const { map, population, foodAmount, airQuality, lastUpdate } = get();
 
-    await axios.post(SERVER_BASE_URL + "game/save/data", {
+    const resp = await axios.post(SERVER_BASE_URL + "game/save/data", {
       username,
       map: JSON.stringify(map),
       population,
-      // foodAmount,
-      foodAmount:14,
+      foodAmount,
       airQuality,
       lastUpdate,
     });
+
+    console.log(resp)
   },
 
   // --- Actions ---
