@@ -44,7 +44,7 @@ def run():
         print("PM1 Atmospheric concentration = " + str(concPM10_0_ATM) + " ug/m3")
 
         # Send a request to the server
-        data = {'sensor_id': SENSOR_ID, 'PM10': concPM10_0_ATM, 'timestamp':time.time()}
+        data = {'sensor_id': SENSOR_ID, 'PM10': concPM10_0_ATM, 'timestamp':int(time.time())}
 
         response = requests.post(SERVER_URL+"storePM10", json=data, headers=headers)
         if response.status_code == 200:

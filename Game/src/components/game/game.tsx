@@ -4,12 +4,33 @@ import GameCanvas from "./gameCanvas";
 import { useGameStore } from "../../state/gameState";
 import { useSessionStore } from "../../state/sessionState";
 
+function pmToQuality(pm: number): { label: string; color: string } {
+  if (pm <= 20) return { label: "Good", color: "text-green-400" };
+  if (pm <= 35.4) return { label: "Moderate", color: "text-yellow-400" };
+  if (pm <= 55.4) return { label: "Sensitive", color: "text-orange-400" };
+  if (pm <= 150.4) return { label: "Unhealthy", color: "text-red-400" };
+  return { label: "Very Unhealthy", color: "text-purple-400" };
+}
+
+function formatFood(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
+  return String(n);
+}
+
 export default function Game() {
   const [dashboardOpen, setDashboard] = useState(false);
   const [zoom, setZoom] = useState(1);
   const { username } = useSessionStore();
-  const { saveGame } = useGameStore();
+  const { saveGame, airQualityHistory, population, foodAmount } = useGameStore();
+
+  // Latest valid hourly PM average
+  const latestPm = [...airQualityHistory].reverse().find((v) => v !== -1) ?? null;
+  const quality = latestPm !== null ? pmToQuality(latestPm) : null;
+
   
+  console.log(population)
+  const totalPopulation = population.reduce((sum, r) => sum + r.population, 0);
 
   return (
     <div className="w-screen h-screen relative overflow-hidden">
@@ -19,18 +40,19 @@ export default function Game() {
           onClick={() => setDashboard(true)}
           className="bg-black/40 hover:bg-black/60 backdrop-blur px-3 py-1.5 rounded-md text-xs text-white"
         >
-          Dashboard
+          Air Quality Dashboard
         </button>
 
         {/* Stats */}
         <div className="flex items-center gap-4 text-xs text-white bg-black/30 backdrop-blur px-3 py-1.5 rounded-md">
           <span>
-            AQ <span className="text-green-400">Good</span>
+            AQ{" "}
+            <span className={quality?.color ?? "text-neutral-400"}>
+              {quality?.label ?? "—"}
+            </span>
           </span>
-          <span>🔥 1d</span>
-          <span>🐜 4/11</span>
-          <span>👑 1</span>
-          <span>🍯 1.2M</span>
+          <span>🐜 {totalPopulation}</span>
+          <span>🍯 {formatFood(foodAmount)}</span>
         </div>
 
         {/* Zoom Controls */}

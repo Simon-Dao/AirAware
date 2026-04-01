@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import axios from "axios";
 import {
   LineChart,
   Line,
@@ -8,46 +9,68 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { useSessionStore } from "../../state/sessionState";
+import { SERVER_BASE_URL } from "../../state/constants";
 
-interface AQData {
-  hour: number; // 0-23
-  minute: number; // 0-59
-  aq: number; // Air quality value
-  lat?: number;
-  long?: number;
+interface ChartPoint {
+  time: string;
+  aq: number;
 }
 
-function Timeline() {
-  const [aqData] = useState<AQData[]>([
-    { hour: 6, minute: 30, aq: 50 },
-    { hour: 12, minute: 15, aq: 95 },
-    { hour: 18, minute: 45, aq: 80 },
-    { hour: 22, minute: 0, aq: 60 },
-  ]);
-  const [currentDate, setCurrentDate] = useState<Date>(new Date());
-  const date = currentDate.toLocaleString("default", {
+function toApiDate(d: Date) {
+  return d.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+type Props = {
+  date: Date;
+  onDateChange: (d: Date) => void;
+};
+
+function Timeline({ date, onDateChange }: Props) {
+  const username = useSessionStore((s) => s.username);
+  const [chartData, setChartData] = useState<ChartPoint[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const dateLabel = date.toLocaleString("default", {
     day: "numeric",
     month: "long",
     year: "numeric",
   });
 
-  const handleNextDay = () => {
-    const next = new Date(currentDate);
-    next.setDate(next.getDate() + 1);
-    setCurrentDate(next);
-  };
+  useEffect(() => {
+    if (!username) return;
 
-  const handlePrevDay = () => {
-    const prev = new Date(currentDate);
-    prev.setDate(prev.getDate() - 1);
-    setCurrentDate(prev);
-  };
+    const fetchData = () => {
+      const start = new Date(date);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(date);
+      end.setHours(23, 59, 59, 999);
+      setLoading(true);
+      axios
+        .get(SERVER_BASE_URL + "user/get/data", {
+          params: {
+            username,
+            begin_time: toApiDate(start),
+            end_time: toApiDate(end),
+          },
+        })
+        .then((res) => {
+          const readings = res.data as { pm: number; timestamp: string }[];
+          const mapped = readings.map((r) => {
+            const d = new Date(r.timestamp);
+            const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+            return { time, aq: r.pm };
+          });
+          mapped.sort((a, b) => a.time.localeCompare(b.time));
+          setChartData(mapped);
+        })
+        .finally(() => setLoading(false));
+    };
 
-  // Format data for recharts
-  const chartData = aqData.map((point) => ({
-    time: `${String(point.hour).padStart(2, "0")}:${String(point.minute).padStart(2, "0")}`,
-    aq: point.aq,
-  }));
+    fetchData();
+    const interval = setInterval(fetchData, 10000);
+    return () => clearInterval(interval);
+  }, [username, date]);
 
   return (
     <div className="w-full h-full flex flex-col gap-4 p-4">
@@ -55,16 +78,16 @@ function Timeline() {
       <div className="flex w-full h-8 text-center">
         <div
           className="flex-1 cursor-pointer select-none hover:bg-gray-200 rounded"
-          onClick={handlePrevDay}
+          onClick={() => { const d = new Date(date); d.setDate(d.getDate() - 1); onDateChange(d); }}
         >
           {"<"}
         </div>
         <div className="flex-2 rounded flex items-center justify-center">
-          {date}
+          {dateLabel}
         </div>
         <div
           className="flex-1 cursor-pointer select-none hover:bg-gray-200 rounded"
-          onClick={handleNextDay}
+          onClick={() => { const d = new Date(date); d.setDate(d.getDate() + 1); onDateChange(d); }}
         >
           {">"}
         </div>
@@ -72,13 +95,17 @@ function Timeline() {
 
       {/* Graph */}
       <div className="w-full h-full">
-        {chartData.length > 0 ? (
+        {loading ? (
+          <div className="text-center text-white w-full h-full flex items-center justify-center">
+            Loading...
+          </div>
+        ) : chartData.length > 0 ? (
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="time" />
               <YAxis
-                label={{ value: "AQ", angle: -90, position: "insideLeft" }}
+                label={{ value: "PM", angle: -90, position: "insideLeft" }}
               />
               <Tooltip />
               <Line

@@ -28,6 +28,8 @@ interface GameState {
   map: Record<number, Record<number, Tile>>;
   
   username: string;
+
+  antTypes: AntType[];
   population: PopulationRecord[];
 
   foodAmount: number;
@@ -35,8 +37,12 @@ interface GameState {
   airQuality: number;
   lastUpdate: number;
 
+  // Index = hours since lastUpdate, value = average PM for that hour
+  airQualityHistory: number[];
+
   loadGame: (username: string) => Promise<void>;
   saveGame: (username: string) => Promise<void>;
+  fetchAirQualityHistory: (username: string) => Promise<void>;
 
   // --- Actions ---
   setAirQuality: (aqi: number) => void;
@@ -57,11 +63,13 @@ export const useGameStore = create<GameState>((set, get) => ({
   // --- Initial State ---
   map: initialMapState(),
   population: [],
+  antTypes: [],
   username: "",
 
   foodAmount: 0,
   airQuality: 0,
   lastUpdate: Date.now(),
+  airQualityHistory: [],
 
   loadGame: async (username: string) => {
     // await new Promise((resolve) => setTimeout(resolve, 4000));
@@ -72,7 +80,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     const x = res.data.state;
     const colony = x.colony;
 
-    await set({population: x.ant_types, foodAmount:colony.foodAmount, airQuality: colony.airQuality, lastUpdate: colony.last_update});
+    await set({population: res.data.state.populations, antTypes:x.ant_types, foodAmount: colony.food_amount, airQuality: colony.air_quality, lastUpdate: colony.last_update});
   },
 
   saveGame: async (username: string) => {
@@ -88,6 +96,52 @@ export const useGameStore = create<GameState>((set, get) => ({
     });
 
     console.log(resp)
+  },
+
+  fetchAirQualityHistory: async (username: string) => {
+    const { lastUpdate } = get();
+
+    // lastUpdate may be Unix seconds (from server) or ms (from Date.now())
+    const lastUpdateMs = lastUpdate > 1e12 ? lastUpdate : lastUpdate * 1000;
+    const beginTime = new Date(lastUpdateMs);
+    const endTime = new Date();
+
+    const res = await axios.get(SERVER_BASE_URL + "user/get/data", {
+      params: {
+        username,
+        begin_time: beginTime.toISOString().replace(/\.\d{3}Z$/, "Z"),
+        end_time: endTime.toISOString().replace(/\.\d{3}Z$/, "Z"),
+      },
+    });
+
+    const readings = res.data as { pm: number; timestamp: string }[];
+
+    // Group readings into hourly buckets relative to lastUpdate
+    const buckets = new Map<number, number[]>();
+    const MS_PER_HOUR = 1000 * 60 * 60;
+
+    for (const r of readings) {
+      const elapsed = new Date(r.timestamp).getTime() - lastUpdateMs;
+      if (elapsed < 0) continue;
+      const hourIndex = Math.floor(elapsed / MS_PER_HOUR);
+      if (!buckets.has(hourIndex)) buckets.set(hourIndex, []);
+      buckets.get(hourIndex)!.push(r.pm);
+    }
+
+    if (buckets.size === 0) {
+      set({ airQualityHistory: [] });
+      return;
+    }
+
+    // Build a dense array from index 0 to the highest bucket
+    const maxIndex = Math.max(...buckets.keys());
+    const history = Array.from({ length: maxIndex + 1 }, (_, i) => {
+      const vals = buckets.get(i);
+      if (!vals || vals.length === 0) return -1; // -1 = no data for that hour
+      return Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10;
+    });
+
+    set({ airQualityHistory: history });
   },
 
   // --- Actions ---
@@ -118,6 +172,6 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   saveTimestamp: () => {
-    set({ lastUpdate: Date.now() });
+    set({ lastUpdate: Math.floor(Date.now() / 1000) });
   },
 }));

@@ -60,7 +60,7 @@ class Database:
 
     def insert_user_reading(self, username, pm, timestamp, longitude, latitude):
         self._execute(
-            "INSERT INTO sensor_reading (username, pm, timestamp, longitude, latitude) VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO sensor_reading (username, pm, timestamp, longitude, latitude) VALUES (?, ?, ?, ?, ?)",
             (username, pm, timestamp, longitude, latitude)
         )
 
@@ -135,10 +135,11 @@ class Database:
                 id INTEGER PRIMARY KEY,
                 username INTEGER NOT NULL,
                 pm REAL NOT NULL,
-                timestamp INTEGER NOT NULL,
+                timestamp TEXT NOT NULL,
                 longitude REAL NOT NULL,
                 latitude REAL NOT NULL,
-                FOREIGN KEY(username) REFERENCES user(username) ON DELETE CASCADE
+                FOREIGN KEY(username) REFERENCES user(username) ON DELETE CASCADE,
+                UNIQUE(username, timestamp)
             )""")
 
             cur.execute("""

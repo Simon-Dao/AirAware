@@ -51,7 +51,7 @@ def pm_get():
     username = request.args.get("username")
     begin_time = request.args.get("begin_time")
     #uses ISO 8601 date standard
-    end_time = request.args.get("end_time", datetime.now(timezone.utc).isoformat())
+    end_time = request.args.get("end_time", datetime.now(timezone.utc).replace(microsecond=0).isoformat())
 
     return jsonify(database.get_readings(username,begin_time, end_time))
 

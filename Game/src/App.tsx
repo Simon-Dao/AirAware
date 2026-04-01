@@ -1,12 +1,20 @@
-import { useState } from "react";
+import { useEffect } from "react";
 import "./App.css";
-import Dashboard from "./components/dashboard/dashboard";
 import Game from "./components/game/game";
 import Title from "./components/title/title";
 import { useSessionStore } from "./state/sessionState";
+import { useGameStore } from "./state/gameState";
 
 function App() {
-  const { stateLoaded } = useSessionStore();
+  const { stateLoaded, username } = useSessionStore();
+  const { fetchAirQualityHistory } = useGameStore();
+
+  useEffect(() => {
+    if (!stateLoaded || !username) return;
+    fetchAirQualityHistory(username);
+    const id = setInterval(() => fetchAirQualityHistory(username), 10_000);
+    return () => clearInterval(id);
+  }, [stateLoaded, username]);
 
   return (
     <div className="">
