@@ -40,7 +40,6 @@ export default function Game() {
     [...airQualityHistory].reverse().find((v) => v !== -1) ?? null;
   const quality = latestPm !== null ? pmToQuality(latestPm) : null;
 
-  console.log(population);
   const totalPopulation = population.reduce((sum, r) => sum + r.population, 0);
 
   return (
@@ -95,7 +94,7 @@ export default function Game() {
               }
               className={`px-2 py-1 text-xs transition-colors ${
                 selectedAction === action
-                  ? "!bg-blue-600 text-white"
+                  ? action === "fill" ? "!bg-green-600 text-white" : "!bg-blue-600 text-white"
                   : "text-white hover:bg-black/40"
               }`}
             >

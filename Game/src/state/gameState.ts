@@ -1,11 +1,11 @@
 // store/useColonyStore.ts
 import axios from "axios";
 import { create } from "zustand";
-import { SERVER_BASE_URL } from "./constants";
+import { SERVER_BASE_URL, TILE_COMPLETION_MS } from "./constants";
 
 type Tile = {
   type: "none" | "tunnel" | "nesting_chamber" | "food_store";
-  completion: Date | null;
+  completion: number | null; // Unix ms timestamp when action completes, null if already complete
 };
 
 type AntType = {
@@ -45,6 +45,9 @@ interface GameState {
   fetchAirQualityHistory: (username: string) => Promise<void>;
 
   // --- Actions ---
+  digTunnel: (row: number, col: number) => void;
+  fillTunnel: (row: number, col: number) => void;
+  completePendingTiles: () => void;
   setAirQuality: (aqi: number) => void;
   getAttackRate: () => number;
   getMiningRate: () => number;
@@ -79,8 +82,9 @@ export const useGameStore = create<GameState>((set, get) => ({
 
     const x = res.data.state;
     const colony = x.colony;
+    const map = colony.map ? JSON.parse(colony.map) : {};
 
-    await set({population: res.data.state.populations, antTypes:x.ant_types, foodAmount: colony.food_amount, airQuality: colony.air_quality, lastUpdate: colony.last_update});
+    await set({ map, population: res.data.state.populations, antTypes: x.ant_types, foodAmount: colony.food_amount, airQuality: colony.air_quality, lastUpdate: colony.last_update });
   },
 
   saveGame: async (username: string) => {
@@ -145,6 +149,63 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   // --- Actions ---
+
+  digTunnel: (row: number, col: number) => {
+    set((state) => ({
+      map: {
+        ...state.map,
+        [row]: { ...state.map[row], [col]: { type: "tunnel", completion: Date.now() + TILE_COMPLETION_MS } },
+      },
+    }));
+  },
+
+  fillTunnel: (row: number, col: number) => {
+    set((state) => {
+      const existing = state.map[row]?.[col];
+      if (!existing) return {};
+      return {
+        map: {
+          ...state.map,
+          [row]: { ...state.map[row], [col]: { type: "none", completion: Date.now() + TILE_COMPLETION_MS } },
+        },
+      };
+    });
+  },
+
+  completePendingTiles: () => {
+    const now = Date.now();
+    set((state) => {
+      let changed = false;
+      const newMap = { ...state.map };
+
+      for (const rowKey of Object.keys(newMap)) {
+        const row = Number(rowKey);
+        const newRow = { ...newMap[row] };
+        let rowChanged = false;
+
+        for (const colKey of Object.keys(newRow)) {
+          const col = Number(colKey);
+          const tile = newRow[col];
+          if (tile.completion !== null && tile.completion <= now) {
+            changed = true;
+            rowChanged = true;
+            if (tile.type === "none") {
+              delete newRow[col];
+            } else {
+              newRow[col] = { ...tile, completion: null };
+            }
+          }
+        }
+
+        if (rowChanged) {
+          newMap[row] = newRow;
+          if (Object.keys(newRow).length === 0) delete newMap[row];
+        }
+      }
+
+      return changed ? { map: newMap } : {};
+    });
+  },
 
   setAirQuality: (aqi: number) => {
     set({ airQuality: aqi });
