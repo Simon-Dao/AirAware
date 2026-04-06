@@ -3,6 +3,10 @@ import Dashboard from "../dashboard/dashboard";
 import GameCanvas from "./gameCanvas";
 import { useGameStore } from "../../state/gameState";
 import { useSessionStore } from "../../state/sessionState";
+import {
+  useUIStore,
+  type SelectedAction,
+} from "../../state/uiState";
 
 function pmToQuality(pm: number): { label: string; color: string } {
   if (pm <= 20) return { label: "Good", color: "text-green-400" };
@@ -18,18 +22,25 @@ function formatFood(n: number): string {
   return String(n);
 }
 
+const ACTIONS: { action: SelectedAction; label: string }[] = [
+  { action: "dig", label: "Dig Tunnel" },
+  { action: "fill", label: "Fill Tunnel" },
+];
+
 export default function Game() {
   const [dashboardOpen, setDashboard] = useState(false);
   const [zoom, setZoom] = useState(1);
   const { username } = useSessionStore();
-  const { saveGame, airQualityHistory, population, foodAmount } = useGameStore();
+  const { saveGame, airQualityHistory, population, foodAmount } =
+    useGameStore();
+  const {selectedAction, setUIState } = useUIStore();
 
   // Latest valid hourly PM average
-  const latestPm = [...airQualityHistory].reverse().find((v) => v !== -1) ?? null;
+  const latestPm =
+    [...airQualityHistory].reverse().find((v) => v !== -1) ?? null;
   const quality = latestPm !== null ? pmToQuality(latestPm) : null;
 
-  
-  console.log(population)
+  console.log(population);
   const totalPopulation = population.reduce((sum, r) => sum + r.population, 0);
 
   return (
@@ -74,11 +85,29 @@ export default function Game() {
           >
             +
           </button>
+          {ACTIONS.map(({ action, label }) => (
+            <button
+              key={action}
+              onClick={() =>
+                setUIState({
+                  selectedAction: selectedAction === action ? "none" : action,
+                })
+              }
+              className={`px-2 py-1 text-xs transition-colors ${
+                selectedAction === action
+                  ? "!bg-blue-600 text-white"
+                  : "text-white hover:bg-black/40"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
           <button
-            onClick={() => {
-              saveGame(username)
-            }}
-          >Save Game</button>
+            onClick={() => saveGame(username)}
+            className="px-2 py-1 text-white hover:bg-black/40"
+          >
+            Save Game
+          </button>
         </div>
       </div>
 

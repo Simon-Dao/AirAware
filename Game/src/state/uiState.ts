@@ -1,17 +1,20 @@
 // store/useColonyStore.ts
 import { create } from "zustand";
 
+export type SelectedAction = "dig" | "fill" | "none";
+
 interface UIState {
   // --- Core State ---
-  inBuildingMode: boolean;
   buildingMode: "dig" | "place" | "none";
+  selectedAction: SelectedAction;
 
   setUIState: (newState: any) => void
 }
-export const useGameStore = create<UIState>((set, get) => ({
+
+export const useUIStore = create<UIState>((set, get) => ({
   // --- Initial State ---
-  inBuildingMode: false,
   buildingMode: "none",
+  selectedAction: "none",
 
   setUIState: (newState: any) => {
     set(newState);
