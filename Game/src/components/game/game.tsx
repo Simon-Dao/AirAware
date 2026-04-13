@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Dashboard from "../dashboard/dashboard";
 import GameCanvas from "./gameCanvas";
 import { useGameStore } from "../../state/gameState";
@@ -40,7 +40,12 @@ export default function Game() {
     [...airQualityHistory].reverse().find((v) => v !== -1) ?? null;
   const quality = latestPm !== null ? pmToQuality(latestPm) : null;
 
-  const totalPopulation = population.reduce((sum, r) => sum + r.population, 0);
+  const totalPopulation = Math.round(population.reduce((sum, r) => sum + r.population, 0));
+
+  useEffect(() => {
+    const id = setInterval(() => useGameStore.getState().tick(1), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <div className="w-screen h-screen relative overflow-hidden">

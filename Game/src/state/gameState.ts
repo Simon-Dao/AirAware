@@ -1,7 +1,38 @@
 // store/useColonyStore.ts
 import axios from "axios";
 import { create } from "zustand";
-import { SERVER_BASE_URL, TILE_COMPLETION_MS } from "./constants";
+import {
+  SERVER_BASE_URL, TILE_COMPLETION_MS,
+  GROWTH_RATE_PER_SECOND, DECAY_RATE_PER_SECOND, SEVERE_DECAY_RATE_PER_SECOND,
+  STARVATION_RATE_PER_SECOND, MIN_TOTAL_POPULATION, MAX_CATCHUP_SECONDS,
+} from "./constants";
+
+// Fills -1 gaps in hourly AQ history via linear interpolation.
+// Leading gaps use the first known value; trailing gaps use the last known value.
+export function interpolateAQHistory(history: number[]): number[] {
+  const result = [...history];
+  const known: number[] = [];
+
+  for (let i = 0; i < result.length; i++) {
+    if (result[i] !== -1) known.push(i);
+  }
+
+  if (known.length === 0) return result;
+
+  for (let i = 0; i < known[0]; i++) result[i] = result[known[0]];
+  for (let i = known[known.length - 1] + 1; i < result.length; i++)
+    result[i] = result[known[known.length - 1]];
+
+  for (let k = 0; k < known.length - 1; k++) {
+    const lo = known[k], hi = known[k + 1];
+    for (let i = lo + 1; i < hi; i++) {
+      const t = (i - lo) / (hi - lo);
+      result[i] = result[lo] + t * (result[hi] - result[lo]);
+    }
+  }
+
+  return result;
+}
 
 type Tile = {
   type: "none" | "tunnel" | "nesting_chamber" | "food_store";
@@ -47,6 +78,7 @@ interface GameState {
   // --- Actions ---
   digTunnel: (row: number, col: number) => void;
   fillTunnel: (row: number, col: number) => void;
+  cancelTile: (row: number, col: number) => void;
   completePendingTiles: () => void;
   setAirQuality: (aqi: number) => void;
   getAttackRate: () => number;
@@ -84,7 +116,11 @@ export const useGameStore = create<GameState>((set, get) => ({
     const colony = x.colony;
     const map = colony.map ? JSON.parse(colony.map) : {};
 
-    await set({ map, population: res.data.state.populations, antTypes: x.ant_types, foodAmount: colony.food_amount, airQuality: colony.air_quality, lastUpdate: colony.last_update });
+    set({ map, population: res.data.state.populations, antTypes: x.ant_types, foodAmount: colony.food_amount, airQuality: colony.air_quality, lastUpdate: colony.last_update });
+
+    const lastUpdateMs = colony.last_update > 1e12 ? colony.last_update : colony.last_update * 1000;
+    const elapsedSeconds = Math.min((Date.now() - lastUpdateMs) / 1000, MAX_CATCHUP_SECONDS);
+    if (elapsedSeconds > 0) get().tick(elapsedSeconds);
   },
 
   saveGame: async (username: string) => {
@@ -96,7 +132,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       population,
       foodAmount,
       airQuality,
-      lastUpdate,
+      lastUpdate: Date.now(),
     });
 
     console.log(resp)
@@ -151,12 +187,16 @@ export const useGameStore = create<GameState>((set, get) => ({
   // --- Actions ---
 
   digTunnel: (row: number, col: number) => {
-    set((state) => ({
-      map: {
-        ...state.map,
-        [row]: { ...state.map[row], [col]: { type: "tunnel", completion: Date.now() + TILE_COMPLETION_MS } },
-      },
-    }));
+    set((state) => {
+      const existing = state.map[row]?.[col];
+      if (existing?.type === "tunnel") return {};
+      return {
+        map: {
+          ...state.map,
+          [row]: { ...state.map[row], [col]: { type: "tunnel", completion: Date.now() + TILE_COMPLETION_MS } },
+        },
+      };
+    });
   },
 
   fillTunnel: (row: number, col: number) => {
@@ -169,6 +209,26 @@ export const useGameStore = create<GameState>((set, get) => ({
           [row]: { ...state.map[row], [col]: { type: "none", completion: Date.now() + TILE_COMPLETION_MS } },
         },
       };
+    });
+  },
+
+  cancelTile: (row: number, col: number) => {
+    set((state) => {
+      const tile = state.map[row]?.[col];
+      if (!tile || tile.completion === null) return {};
+
+      const newRow = { ...state.map[row] };
+      if (tile.type === "tunnel") {
+        // Was digging — remove tile back to dirt
+        delete newRow[col];
+      } else {
+        // Was filling — restore to completed tunnel
+        newRow[col] = { type: "tunnel", completion: null };
+      }
+
+      const newMap = { ...state.map, [row]: newRow };
+      if (Object.keys(newRow).length === 0) delete newMap[row];
+      return { map: newMap };
     });
   },
 
@@ -212,25 +272,40 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   tick: (deltaSeconds: number) => {
-    set({});
+    const state = get();
+    if (state.population.length === 0) return;
+
+    const foragingRate = get().getForagingRate();
+    const hungerRate = get().getHungerRate();
+    const newFood = Math.max(0, state.foodAmount + (foragingRate - hungerRate) * deltaSeconds);
+    const isStarving = newFood === 0;
+
+    const pm = state.airQuality;
+    let rate = pm <= 20    ? GROWTH_RATE_PER_SECOND
+             : pm <= 35.4  ? 0
+             : pm <= 150.4 ? -DECAY_RATE_PER_SECOND
+                           : -SEVERE_DECAY_RATE_PER_SECOND;
+    if (isStarving) rate -= STARVATION_RATE_PER_SECOND;
+
+    const factor = 1 + rate * deltaSeconds;
+    let newPop = state.population.map(r => ({ ...r, population: r.population * factor }));
+    const total = newPop.reduce((s, r) => s + r.population, 0);
+
+    if (total <= 0) {
+      newPop = state.population.map(r => ({ ...r, population: MIN_TOTAL_POPULATION / state.population.length }));
+    } else if (total < MIN_TOTAL_POPULATION) {
+      const scale = MIN_TOTAL_POPULATION / total;
+      newPop = newPop.map(r => ({ ...r, population: r.population * scale }));
+    }
+
+    set({ foodAmount: newFood, population: newPop });
   },
 
-  getAttackRate: () => {
-    return 0;
-  },
-  getMiningRate: () => {
-    return 0;
-  },
-  getForagingRate: () => {
-    return 0;
-  },
-  getHungerRate: () => {
-    return 0;
-  },
-
-  getTotalPopulation: () => {
-    return 0;
-  },
+  getAttackRate: () => get().population.reduce((s, r) => s + r.population * r.antType.attack, 0),
+  getMiningRate: () => get().population.reduce((s, r) => s + r.population * r.antType.mining, 0),
+  getForagingRate: () => get().population.reduce((s, r) => s + r.population * r.antType.foraging, 0),
+  getHungerRate: () => get().population.reduce((s, r) => s + r.population * r.antType.hunger_cost, 0),
+  getTotalPopulation: () => get().population.reduce((s, r) => s + r.population, 0),
 
   saveTimestamp: () => {
     set({ lastUpdate: Math.floor(Date.now() / 1000) });

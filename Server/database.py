@@ -66,8 +66,8 @@ class Database:
 
     def save_game_state(self, username, map, food_amount, aq, populations, last_update=None):
         self._execute(
-            "INSERT OR REPLACE INTO colony (username, map, food_amount, air_quality) VALUES (?, ?, ?, ?)",
-            (username, map, food_amount, aq)
+            "INSERT OR REPLACE INTO colony (username, map, food_amount, air_quality, last_update) VALUES (?, ?, ?, ?, ?)",
+            (username, map, food_amount, aq, last_update)
         )
         colony = self._fetch("SELECT id FROM colony WHERE username = ?", (username,))
         colony_id = colony[0]['id']

@@ -8,7 +8,7 @@ type GameCanvasProps = {
 };
 
 function GameCanvas({ zoom }: GameCanvasProps) {
-  const { digTunnel, fillTunnel, completePendingTiles } = useGameStore();
+  const { digTunnel, fillTunnel, cancelTile, completePendingTiles } = useGameStore();
   const { selectedAction } = useUIStore();
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -150,6 +150,7 @@ function GameCanvas({ zoom }: GameCanvasProps) {
     window.addEventListener("resize", resize);
 
     const handleMouseDown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
       const action = useUIStore.getState().selectedAction;
       lastMouse.current = { x: e.clientX, y: e.clientY };
 
@@ -196,7 +197,20 @@ function GameCanvas({ zoom }: GameCanvasProps) {
 
     canvas.style.cursor = "grab";
 
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      const { row, col } = mouseToGrid(e);
+      if (row >= 0) {
+        const tile = useGameStore.getState().map[row]?.[col];
+        if (tile?.completion !== null && tile?.completion !== undefined && tile.completion > Date.now()) {
+          cancelTile(row, col);
+          draw();
+        }
+      }
+    };
+
     canvas.addEventListener("mousedown", handleMouseDown);
+    canvas.addEventListener("contextmenu", handleContextMenu);
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
 
@@ -260,6 +274,7 @@ function GameCanvas({ zoom }: GameCanvasProps) {
     return () => {
       window.removeEventListener("resize", resize);
       canvas.removeEventListener("mousedown", handleMouseDown);
+      canvas.removeEventListener("contextmenu", handleContextMenu);
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
       window.removeEventListener("keydown", handleKeyDown);
@@ -267,7 +282,7 @@ function GameCanvas({ zoom }: GameCanvasProps) {
       cancelAnimationFrame(animationFrame);
       unsubscribe();
     };
-  }, [zoom, digTunnel, fillTunnel, completePendingTiles]);
+  }, [zoom, digTunnel, fillTunnel, cancelTile, completePendingTiles]);
 
   return (
     <canvas
