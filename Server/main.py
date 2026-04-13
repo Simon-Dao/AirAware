@@ -55,6 +55,45 @@ def pm_get():
 
     return jsonify(database.get_readings(username,begin_time, end_time))
 
+@app.route('/user/get/readings', methods=['GET'])
+def get_readings():
+    """
+    Get sensor readings for a user within a timeframe
+    ---
+    parameters:
+      - in: query
+        name: username
+        type: string
+        required: true
+      - in: query
+        name: begin_time
+        type: string
+        format: ISO 8601
+        required: true
+      - in: query
+        name: end_time
+        type: string
+        format: ISO 8601
+        required: false
+    tags:
+      - User
+    responses:
+      200:
+        description: List of sensor readings
+      400:
+        description: Missing required parameters
+    """
+    username = request.args.get("username")
+    begin_time = request.args.get("begin_time")
+
+    if not username or not begin_time:
+        return jsonify({"error": "username and begin_time are required"}), 400
+
+    end_time = request.args.get("end_time", datetime.now(timezone.utc).replace(microsecond=0).isoformat())
+
+    readings = database.get_readings(username, begin_time, end_time)
+    return jsonify({"readings": readings})
+
 @app.route('/user/add/data', methods=['POST'])
 def pm_store():
     """
