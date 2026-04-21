@@ -256,10 +256,45 @@ def save_game_state():
     food_amount = data.get('foodAmount')
     air_quality = data.get('airQuality')
     populations = data.get('population')
+    egg_inventory = data.get('eggInventory', {})
     last_update = data.get('lastUpdate')
 
-    database.save_game_state(username, map, food_amount, air_quality, populations, last_update)
+    database.save_game_state(username, map, food_amount, air_quality, populations, egg_inventory, last_update)
     return jsonify({"success": True})
+
+@app.route('/game/unlock/ant_type', methods=['POST'])
+def unlock_ant_type():
+    """
+    Unlock an ant type for a user by spending food
+    ---
+    tags:
+      - Game
+    parameters:
+      - in: body
+        name: body
+        schema:
+          type: object
+          properties:
+            username:
+              type: string
+            ant_type_id:
+              type: integer
+    responses:
+      200:
+        description: Unlock result
+      400:
+        description: Missing parameters or insufficient food
+    """
+    data = request.get_json()
+    username = data.get('username')
+    ant_type_id = data.get('ant_type_id')
+
+    if not username or ant_type_id is None:
+        return jsonify({"success": False, "message": "username and ant_type_id are required"}), 400
+
+    success, message = database.unlock_ant_type(username, ant_type_id)
+    status = 200 if success else 400
+    return jsonify({"success": success, "message": message}), status
 
 if __name__ == '__main__':
     app.run(debug=True)

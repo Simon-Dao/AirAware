@@ -1,5 +1,26 @@
-import sqlite3, time
+import sqlite3, time, json
 from datetime import datetime, timezone
+
+
+def default_starting_map():
+    """Returns the JSON string for a new colony's pre-dug starting layout.
+
+    A narrow entrance shaft (col 50) leads down into a small oval chamber.
+    All tiles are already complete (completion = null).
+    """
+    CENTER = 50
+    tiles = {
+        0: [CENTER],
+        1: [CENTER],
+        2: [CENTER - 1, CENTER, CENTER + 1],
+        3: [CENTER - 2, CENTER - 1, CENTER, CENTER + 1, CENTER + 2],
+        4: [CENTER - 2, CENTER - 1, CENTER, CENTER + 1, CENTER + 2],
+        5: [CENTER - 1, CENTER, CENTER + 1],
+    }
+    map_data = {}
+    for row, cols in tiles.items():
+        map_data[row] = {col: {"type": "tunnel", "completion": None} for col in cols}
+    return json.dumps(map_data)
 
 class Database:
     
@@ -55,8 +76,60 @@ class Database:
         )
         self._execute(
             "INSERT OR IGNORE INTO colony (username,air_quality,food_amount,map) VALUES (?,?,?,?)",
-            (username,0,0,"{}")
+            (username, 0, 0, default_starting_map())
         )
+        # Unlock the cheapest ant type (Worker) by default
+        cheapest = self._fetch(
+            "SELECT id FROM ant_type ORDER BY unlock_cost ASC LIMIT 1"
+        )
+        if cheapest:
+            self._execute(
+                "INSERT OR IGNORE INTO user_unlocked_ant_type (username, ant_type_id) VALUES (?,?)",
+                (username, cheapest[0]['id'])
+            )
+
+    def get_unlocked_ant_type_ids(self, username):
+        rows = self._fetch(
+            "SELECT ant_type_id FROM user_unlocked_ant_type WHERE username = ?",
+            (username,)
+        )
+        return [r['ant_type_id'] for r in rows]
+
+    def unlock_ant_type(self, username, ant_type_id):
+        """Deducts food and records the unlock. Returns (success, message)."""
+        ant_type = self._fetch(
+            "SELECT unlock_cost FROM ant_type WHERE id = ?",
+            (ant_type_id,),
+            one=True
+        )
+        if not ant_type:
+            return False, "Ant type not found"
+
+        already = self._fetch(
+            "SELECT 1 FROM user_unlocked_ant_type WHERE username=? AND ant_type_id=?",
+            (username, ant_type_id)
+        )
+        if already:
+            return False, "Already unlocked"
+
+        cost = ant_type['unlock_cost']
+        colony = self._fetch(
+            "SELECT food_amount FROM colony WHERE username=?",
+            (username,),
+            one=True
+        )
+        if not colony or colony['food_amount'] < cost:
+            return False, "Not enough food"
+
+        self._execute(
+            "UPDATE colony SET food_amount = food_amount - ? WHERE username = ?",
+            (cost, username)
+        )
+        self._execute(
+            "INSERT INTO user_unlocked_ant_type (username, ant_type_id) VALUES (?,?)",
+            (username, ant_type_id)
+        )
+        return True, "Unlocked"
 
     def insert_user_reading(self, username, pm, timestamp, longitude, latitude):
         self._execute(
@@ -64,7 +137,25 @@ class Database:
             (username, pm, timestamp, longitude, latitude)
         )
 
-    def save_game_state(self, username, map, food_amount, aq, populations, last_update=None):
+    def get_egg_inventory(self, colony_id):
+        """Returns {ant_type_id: count} for all egg types in the colony."""
+        rows = self._fetch(
+            "SELECT ant_type_id, count FROM egg_inventory WHERE colony_id = ?",
+            (colony_id,)
+        )
+        return {r['ant_type_id']: r['count'] for r in rows}
+
+    def save_egg_inventory(self, colony_id, eggs):
+        """Persists egg inventory. eggs = {ant_type_id: count}."""
+        self._execute("DELETE FROM egg_inventory WHERE colony_id = ?", (colony_id,))
+        for ant_type_id, count in eggs.items():
+            if count > 0:
+                self._execute(
+                    "INSERT INTO egg_inventory (colony_id, ant_type_id, count) VALUES (?,?,?)",
+                    (colony_id, int(ant_type_id), count)
+                )
+
+    def save_game_state(self, username, map, food_amount, aq, populations, egg_inventory=None, last_update=None):
         self._execute(
             "INSERT OR REPLACE INTO colony (username, map, food_amount, air_quality, last_update) VALUES (?, ?, ?, ?, ?)",
             (username, map, food_amount, aq, last_update)
@@ -84,6 +175,9 @@ class Database:
                 "INSERT INTO colony_population (colony_id, ant_type_id, population) VALUES (?, ?, ?)",
                 (colony_id, ant_type_id, population_count)
             )
+
+        if egg_inventory is not None:
+            self.save_egg_inventory(colony_id, egg_inventory)
 
     def retrieve_game_state(self, username):
         colony = self._fetch(
@@ -105,10 +199,15 @@ class Database:
             "SELECT * FROM ant_type",
         )
         
+        unlocked_ids = self.get_unlocked_ant_type_ids(username)
+        egg_inventory = self.get_egg_inventory(colony['id'])
+
         result = {}
         result['colony'] = colony
         result['populations'] = populations
         result['ant_types'] = ant_types
+        result['unlocked_ant_type_ids'] = unlocked_ids
+        result['egg_inventory'] = egg_inventory
 
         return result
 
@@ -120,7 +219,7 @@ class Database:
         cur = conn.cursor()
         try:
             if clear:
-                tables = ["user", "sensor_reading", "colony", "ant_type", "colony_population"]
+                tables = ["user", "sensor_reading", "colony", "ant_type", "colony_population", "user_unlocked_ant_type", "egg_inventory"]
                 for table in tables:
                     cur.execute(f"DROP TABLE IF EXISTS {table}")
 
@@ -161,7 +260,24 @@ class Database:
                 foraging REAL NOT NULL,
                 mining REAL NOT NULL,
                 hunger_cost REAL NOT NULL,
-                attack REAL NOT NULL
+                attack REAL NOT NULL,
+                unlock_cost INTEGER NOT NULL DEFAULT 0
+            )""")
+
+            # Migrate: add unlock_cost if it doesn't exist yet
+            try:
+                cur.execute("ALTER TABLE ant_type ADD COLUMN unlock_cost INTEGER NOT NULL DEFAULT 0")
+                conn.commit()
+            except Exception:
+                pass
+
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_unlocked_ant_type (
+                username TEXT NOT NULL,
+                ant_type_id INTEGER NOT NULL,
+                PRIMARY KEY (username, ant_type_id),
+                FOREIGN KEY(username) REFERENCES user(username) ON DELETE CASCADE,
+                FOREIGN KEY(ant_type_id) REFERENCES ant_type(id)
             )""")
 
             cur.execute("""
@@ -173,6 +289,17 @@ class Database:
                 FOREIGN KEY(colony_id) REFERENCES colony(id) ON DELETE CASCADE,
                 FOREIGN KEY(ant_type_id) REFERENCES ant_type(id)
             )""")
+
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS egg_inventory (
+                colony_id INTEGER NOT NULL,
+                ant_type_id INTEGER NOT NULL,
+                count REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (colony_id, ant_type_id),
+                FOREIGN KEY(colony_id) REFERENCES colony(id) ON DELETE CASCADE,
+                FOREIGN KEY(ant_type_id) REFERENCES ant_type(id)
+            )""")
+
             conn.commit()
         finally:
             conn.close()

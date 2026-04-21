@@ -9,7 +9,7 @@ Creates:
   - A saved colony/game state
 """
 
-from database import Database
+from database import Database, default_starting_map
 from datetime import datetime, timezone, timedelta
 import random
 import json
@@ -50,7 +50,7 @@ def pm_for_hour(hour: int) -> float:
 now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
 readings_added = 0
 
-for day_offset in range(14, -1, -1):
+for day_offset in range(59, -1, -1):
     day = now - timedelta(days=day_offset)
     hours = sorted(random.sample(range(24), 7))
     # Start each day from a slightly different base position
@@ -69,22 +69,39 @@ for day_offset in range(14, -1, -1):
 print(f"Inserted {readings_added} sensor readings over 15 days (March 17–31)")
 
 # ── Ant types ────────────────────────────────────────────────────────────────
+# Rates are per-ant per-second.
+# With ~50 Workers: net foraging ~+0.05/s → Scout (500 food) in ~2.5 hrs from starting 250 food.
+# (name, foraging, mining, hunger_cost, attack, unlock_cost)
 ant_types = [
-    ("Worker",   0.8, 0.3, 0.5, 0.2),
-    ("Soldier",  0.2, 0.1, 0.7, 0.9),
-    ("Scout",    0.6, 0.1, 0.4, 0.3),
-    ("Miner",    0.3, 0.9, 0.6, 0.1),
+    ("Worker",   0.003, 0.001, 0.002,  0.001,    0),
+    ("Scout",    0.002, 0.0003, 0.0015, 0.001,  500),
+    ("Miner",    0.001, 0.003,  0.002,  0.0003, 1000),
+    ("Soldier",  0.0007, 0.0003, 0.0025, 0.003, 2000),
 ]
 
-for name, foraging, mining, hunger_cost, attack in ant_types:
+for name, foraging, mining, hunger_cost, attack, unlock_cost in ant_types:
     existing = db._fetch("SELECT id FROM ant_type WHERE name = ?", (name,))
     if not existing:
         db._execute(
-            "INSERT INTO ant_type (name, foraging, mining, hunger_cost, attack) VALUES (?,?,?,?,?)",
-            (name, foraging, mining, hunger_cost, attack)
+            "INSERT INTO ant_type (name, foraging, mining, hunger_cost, attack, unlock_cost) VALUES (?,?,?,?,?,?)",
+            (name, foraging, mining, hunger_cost, attack, unlock_cost)
+        )
+    else:
+        db._execute(
+            "UPDATE ant_type SET foraging=?, mining=?, hunger_cost=?, attack=?, unlock_cost=? WHERE name=?",
+            (foraging, mining, hunger_cost, attack, unlock_cost, name)
         )
 
-print(f"Inserted {len(ant_types)} ant types")
+print(f"Inserted/updated {len(ant_types)} ant types")
+
+# ── Ensure testuser has Worker unlocked ──────────────────────────────────────
+worker = db._fetch("SELECT id FROM ant_type WHERE name='Worker'", one=True)
+if worker:
+    db._execute(
+        "INSERT OR IGNORE INTO user_unlocked_ant_type (username, ant_type_id) VALUES (?,?)",
+        (USERNAME, worker['id'])
+    )
+    print(f"Ensured Worker is unlocked for {USERNAME}")
 
 # ── Game state ───────────────────────────────────────────────────────────────
 ant_type_rows = db._fetch("SELECT * FROM ant_type")
@@ -93,15 +110,19 @@ populations = [
     for r in ant_type_rows
 ]
 
+worker_id = worker['id'] if worker else None
+starter_eggs = {worker_id: 20} if worker_id else {}
+
 db.save_game_state(
     username=USERNAME,
-    map=json.dumps({"tiles": []}),
+    map=default_starting_map(),
     food_amount=250,
     aq=72,
     populations=populations,
+    egg_inventory=starter_eggs,
     last_update=int(now.timestamp()),
 )
-print(f"Saved game state for {USERNAME}")
+print(f"Saved game state for {USERNAME} (20 Worker starter eggs)")
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 print("\n--- Verification ---")
