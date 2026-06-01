@@ -1,7 +1,7 @@
 // store/useColonyStore.ts
 import { create } from "zustand";
 
-export type SelectedAction = "dig" | "fill" | "none";
+export type SelectedAction = "dig" | "fill" | "nest" | "none";
 
 interface UIState {
   // --- Core State ---

@@ -23,9 +23,6 @@ function pmToQuality(pm: number): { label: string; color: string } {
   return { label: "Very Unhealthy", color: "text-purple-400" };
 }
 
-function pmToScore(pm: number): number {
-  return Math.max(0, Math.min(100, Math.round(100 - pm)));
-}
 
 function Dashboard({ setDashboard }: DashboardProps) {
   const username = useSessionStore((s) => s.username);
@@ -34,6 +31,7 @@ function Dashboard({ setDashboard }: DashboardProps) {
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [streak, setStreak] = useState<number>(0);
   const [latestPm, setLatestPm] = useState<number | null>(null);
+  const [avg24hPm, setAvg24hPm] = useState<number | null>(null);
 
   useEffect(() => {
     if (!username) return;
@@ -44,7 +42,7 @@ function Dashboard({ setDashboard }: DashboardProps) {
       start.setDate(start.getDate() - 30);
 
       axios
-        .get(SERVER_BASE_URL + "user/get/data", {
+        .get(SERVER_BASE_URL + "user/get/readings", {
           params: {
             username,
             begin_time: toApiDate(start),
@@ -52,13 +50,20 @@ function Dashboard({ setDashboard }: DashboardProps) {
           },
         })
         .then((res) => {
-          const readings = res.data as { pm: number; timestamp: string }[];
+          const readings = res.data.readings as { pm: number; timestamp: string }[];
           if (readings.length === 0) return;
 
           const sorted = [...readings].sort(
             (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
           );
           setLatestPm(sorted[0].pm);
+
+          const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+          const last24h = readings.filter((r) => new Date(r.timestamp).getTime() >= cutoff);
+          if (last24h.length > 0) {
+            const avg = last24h.reduce((sum, r) => sum + r.pm, 0) / last24h.length;
+            setAvg24hPm(avg);
+          }
 
           const daySet = new Set(
             readings.map((r) => {
@@ -85,7 +90,7 @@ function Dashboard({ setDashboard }: DashboardProps) {
   }, [username]);
 
   const quality = latestPm !== null ? pmToQuality(latestPm) : null;
-  const score = latestPm !== null ? pmToScore(latestPm) : null;
+  const score = avg24hPm !== null ? pmToQuality(avg24hPm) : null;
 
   return (
     <>
@@ -117,17 +122,21 @@ function Dashboard({ setDashboard }: DashboardProps) {
 
           {/* Stats */}
           <div className="flex flex-col gap-3 mb-6">
-            <div className="p-3 rounded-lg bg-neutral-800 flex justify-between items-center">
-              <span className="text-sm text-neutral-400">Air Quality</span>
+            <div className="p-3 rounded-lg bg-neutral-800 flex flex-col justify-between items-start">
+              <span className="text-sm text-neutral-400">Current Air Quality</span>
               <span className={`text-sm font-semibold ${quality?.color ?? "text-neutral-400"}`}>
+                {latestPm?.toFixed(2)} pm2
+                <br />
                 {quality?.label ?? "—"}
               </span>
             </div>
 
-            <div className="p-3 rounded-lg bg-neutral-800 flex justify-between items-center">
-              <span className="text-sm text-neutral-400">AQ Score</span>
-              <span className="text-sm font-semibold text-blue-400">
-                {score !== null ? score : "— "}%
+            <div className="p-3 rounded-lg bg-neutral-800 flex flex-col justify-between items-start">
+              <span className="text-sm text-neutral-400">Daily AQ Score</span>
+              <span className={`text-sm font-semibold ${score?.color ?? "text-neutral-400"}`}>
+                24 Hour Average: {avg24hPm?.toFixed(2)} pm2
+                <br />
+                {score?.label ?? "—"}
               </span>
             </div>
           </div>
@@ -145,7 +154,7 @@ function Dashboard({ setDashboard }: DashboardProps) {
           <div className="w-1/2 h-full flex flex-col">
             <div className="h-full card">
               <h2>Streak Calendar</h2>
-              <Calendar />
+              <Calendar onDateChange={setSelectedDate} />
             </div>
             <div className="h-full card">
               <h2>Daily AQ Timeline</h2>

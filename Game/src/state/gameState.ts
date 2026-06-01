@@ -3,8 +3,9 @@ import axios from "axios";
 import { create } from "zustand";
 import {
   SERVER_BASE_URL, TILE_COMPLETION_MS,
-  GROWTH_RATE_PER_SECOND, DECAY_RATE_PER_SECOND, SEVERE_DECAY_RATE_PER_SECOND,
+  DECAY_RATE_PER_SECOND, SEVERE_DECAY_RATE_PER_SECOND,
   STARVATION_RATE_PER_SECOND, MIN_TOTAL_POPULATION, MAX_CATCHUP_SECONDS,
+  HATCH_RATE_BASE, CAPACITY_PER_CHAMBER, DIG_FOOD_COST, FILL_FOOD_COST, NEST_FOOD_COST, EGG_FOOD_COST,
 } from "./constants";
 
 // Fills -1 gaps in hourly AQ history via linear interpolation.
@@ -37,14 +38,17 @@ export function interpolateAQHistory(history: number[]): number[] {
 type Tile = {
   type: "none" | "tunnel" | "nesting_chamber" | "food_store";
   completion: number | null; // Unix ms timestamp when action completes, null if already complete
+  antTypeId?: number;        // only set for nesting_chamber tiles
 };
 
-type AntType = {
+export type AntType = {
+  id: number;
   name: string;
   foraging: number;
   mining: number;
   hunger_cost: number;
   attack: number;
+  unlock_cost: number;
 };
 
 type PopulationRecord = {
@@ -57,11 +61,15 @@ interface GameState {
 
   //basically a more space efficient 2d array
   map: Record<number, Record<number, Tile>>;
-  
+
   username: string;
 
   antTypes: AntType[];
   population: PopulationRecord[];
+  unlockedAntTypeIds: number[];
+
+  // antTypeId → fractional egg count
+  eggInventory: Record<number, number>;
 
   foodAmount: number;
 
@@ -74,18 +82,24 @@ interface GameState {
   loadGame: (username: string) => Promise<void>;
   saveGame: (username: string) => Promise<void>;
   fetchAirQualityHistory: (username: string) => Promise<void>;
+  pollAirQuality: (username: string) => Promise<void>;
+  unlockAntType: (username: string, antTypeId: number) => Promise<{ success: boolean; message: string }>;
 
   // --- Actions ---
   digTunnel: (row: number, col: number) => void;
   fillTunnel: (row: number, col: number) => void;
+  convertToNestingChamber: (row: number, col: number, antTypeId: number) => void;
   cancelTile: (row: number, col: number) => void;
   completePendingTiles: () => void;
   setAirQuality: (aqi: number) => void;
+  recruitAnts: (antTypeId: number, count: number) => void;
   getAttackRate: () => number;
   getMiningRate: () => number;
   getForagingRate: () => number;
   getHungerRate: () => number;
   getTotalPopulation: () => number;
+  getHousingCapacity: () => number;
+  getPopulationRatePerHour: () => number;
   tick: (deltaSeconds: number) => void;
   saveTimestamp: () => void;
 }
@@ -99,6 +113,8 @@ export const useGameStore = create<GameState>((set, get) => ({
   map: initialMapState(),
   population: [],
   antTypes: [],
+  unlockedAntTypeIds: [],
+  eggInventory: {},
   username: "",
 
   foodAmount: 0,
@@ -107,7 +123,6 @@ export const useGameStore = create<GameState>((set, get) => ({
   airQualityHistory: [],
 
   loadGame: async (username: string) => {
-    // await new Promise((resolve) => setTimeout(resolve, 4000));
     const res = await axios.get(SERVER_BASE_URL + "game/get/data", {
       params: { username },
     });
@@ -116,7 +131,28 @@ export const useGameStore = create<GameState>((set, get) => ({
     const colony = x.colony;
     const map = colony.map ? JSON.parse(colony.map) : {};
 
-    set({ map, population: res.data.state.populations, antTypes: x.ant_types, foodAmount: colony.food_amount, airQuality: colony.air_quality, lastUpdate: colony.last_update });
+    const population = res.data.state.populations.map((p: { ant_type_id: number; population: number }) => ({
+      population: p.population,
+      antType: x.ant_types.find((at: AntType & { id: number }) => at.id === p.ant_type_id),
+    }));
+
+    // egg_inventory comes back as {ant_type_id: count}, keys may be strings
+    const rawEggs = x.egg_inventory ?? {};
+    const eggInventory: Record<number, number> = {};
+    for (const [k, v] of Object.entries(rawEggs)) {
+      eggInventory[Number(k)] = v as number;
+    }
+
+    set({
+      map,
+      population,
+      antTypes: x.ant_types,
+      unlockedAntTypeIds: x.unlocked_ant_type_ids ?? [],
+      eggInventory,
+      foodAmount: colony.food_amount,
+      airQuality: colony.air_quality,
+      lastUpdate: colony.last_update,
+    });
 
     const lastUpdateMs = colony.last_update > 1e12 ? colony.last_update : colony.last_update * 1000;
     const elapsedSeconds = Math.min((Date.now() - lastUpdateMs) / 1000, MAX_CATCHUP_SECONDS);
@@ -124,7 +160,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   saveGame: async (username: string) => {
-    const { map, population, foodAmount, airQuality, lastUpdate } = get();
+    const { map, population, foodAmount, airQuality, eggInventory } = get();
 
     const resp = await axios.post(SERVER_BASE_URL + "game/save/data", {
       username,
@@ -132,10 +168,11 @@ export const useGameStore = create<GameState>((set, get) => ({
       population,
       foodAmount,
       airQuality,
+      eggInventory,
       lastUpdate: Date.now(),
     });
 
-    console.log(resp)
+    console.log(resp);
   },
 
   fetchAirQualityHistory: async (username: string) => {
@@ -190,7 +227,9 @@ export const useGameStore = create<GameState>((set, get) => ({
     set((state) => {
       const existing = state.map[row]?.[col];
       if (existing?.type === "tunnel") return {};
+      if (state.foodAmount < DIG_FOOD_COST) return {};
       return {
+        foodAmount: state.foodAmount - DIG_FOOD_COST,
         map: {
           ...state.map,
           [row]: { ...state.map[row], [col]: { type: "tunnel", completion: Date.now() + TILE_COMPLETION_MS } },
@@ -203,10 +242,30 @@ export const useGameStore = create<GameState>((set, get) => ({
     set((state) => {
       const existing = state.map[row]?.[col];
       if (!existing) return {};
+      if (state.foodAmount < FILL_FOOD_COST) return {};
       return {
+        foodAmount: state.foodAmount - FILL_FOOD_COST,
         map: {
           ...state.map,
           [row]: { ...state.map[row], [col]: { type: "none", completion: Date.now() + TILE_COMPLETION_MS } },
+        },
+      };
+    });
+  },
+
+  convertToNestingChamber: (row: number, col: number, antTypeId: number) => {
+    set((state) => {
+      const tile = state.map[row]?.[col];
+      if (!tile || tile.type !== "tunnel" || tile.completion !== null) return {};
+      if (state.foodAmount < NEST_FOOD_COST) return {};
+      return {
+        foodAmount: state.foodAmount - NEST_FOOD_COST,
+        map: {
+          ...state.map,
+          [row]: {
+            ...state.map[row],
+            [col]: { type: "nesting_chamber", completion: Date.now() + TILE_COMPLETION_MS, antTypeId },
+          },
         },
       };
     });
@@ -221,6 +280,9 @@ export const useGameStore = create<GameState>((set, get) => ({
       if (tile.type === "tunnel") {
         // Was digging — remove tile back to dirt
         delete newRow[col];
+      } else if (tile.type === "nesting_chamber") {
+        // Was converting — restore to completed tunnel
+        newRow[col] = { type: "tunnel", completion: null };
       } else {
         // Was filling — restore to completed tunnel
         newRow[col] = { type: "tunnel", completion: null };
@@ -271,18 +333,37 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({ airQuality: aqi });
   },
 
+  pollAirQuality: async (username: string) => {
+    const now = new Date();
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+
+    const res = await axios.get(SERVER_BASE_URL + "user/get/readings", {
+      params: {
+        username,
+        begin_time: oneHourAgo.toISOString().replace(/\.\d{3}Z$/, "Z"),
+        end_time: now.toISOString().replace(/\.\d{3}Z$/, "Z"),
+      },
+    });
+
+    const readings = res.data.readings as { pm: number }[];
+    if (readings.length === 0) return;
+
+    const avg = readings.reduce((sum, r) => sum + r.pm, 0) / readings.length;
+    set({ airQuality: avg });
+  },
+
   tick: (deltaSeconds: number) => {
     const state = get();
     if (state.population.length === 0) return;
 
+    // --- Food & population decay ---
     const foragingRate = get().getForagingRate();
     const hungerRate = get().getHungerRate();
     const newFood = Math.max(0, state.foodAmount + (foragingRate - hungerRate) * deltaSeconds);
     const isStarving = newFood === 0;
 
     const pm = state.airQuality;
-    let rate = pm <= 20    ? GROWTH_RATE_PER_SECOND
-             : pm <= 35.4  ? 0
+    let rate = pm <= 20    ? 0
              : pm <= 150.4 ? -DECAY_RATE_PER_SECOND
                            : -SEVERE_DECAY_RATE_PER_SECOND;
     if (isStarving) rate -= STARVATION_RATE_PER_SECOND;
@@ -298,7 +379,91 @@ export const useGameStore = create<GameState>((set, get) => ({
       newPop = newPop.map(r => ({ ...r, population: r.population * scale }));
     }
 
-    set({ foodAmount: newFood, population: newPop });
+    // --- Egg hatching from nesting chambers ---
+    const hatchMultiplier =
+      pm <= 20    ? 1.0 :
+      pm <= 35.4  ? 0.7 :
+      pm <= 55.4  ? 0.5 :
+      pm <= 150.4 ? 0.3 : 0.1;
+
+    // Count active (completed) nesting_chamber tiles grouped by antTypeId
+    const chambersByType: Record<number, number> = {};
+    let totalChambers = 0;
+    for (const rowTiles of Object.values(state.map)) {
+      for (const tile of Object.values(rowTiles)) {
+        if (tile.type === "nesting_chamber" && tile.completion === null && tile.antTypeId !== undefined) {
+          chambersByType[tile.antTypeId] = (chambersByType[tile.antTypeId] ?? 0) + 1;
+          totalChambers++;
+        }
+      }
+    }
+
+    // Hatching is gated by housing capacity: each chamber supports CAPACITY_PER_CHAMBER ants.
+    // If the colony is at or above capacity, eggs can't hatch.
+    const housingCapacity = totalChambers * CAPACITY_PER_CHAMBER;
+    const currentTotal = newPop.reduce((s, r) => s + r.population, 0);
+    const availableCapacity = Math.max(0, housingCapacity - currentTotal);
+
+    const newEggs = { ...state.eggInventory };
+    const eggHatches: Record<number, number> = {};
+
+    if (availableCapacity > 0) {
+      for (const [antTypeIdStr, chamberCount] of Object.entries(chambersByType)) {
+        const antTypeId = Number(antTypeIdStr);
+        const available = newEggs[antTypeId] ?? 0;
+        if (available <= 0) continue;
+        // Cap total hatches this tick to remaining capacity
+        const maxHatch = Math.min(available, availableCapacity, HATCH_RATE_BASE * hatchMultiplier * chamberCount * deltaSeconds);
+        newEggs[antTypeId] = available - maxHatch;
+        eggHatches[antTypeId] = maxHatch;
+      }
+    }
+
+    // Add hatched ants to population, creating a record if the type isn't there yet
+    for (const [antTypeIdStr, hatched] of Object.entries(eggHatches)) {
+      const antTypeId = Number(antTypeIdStr);
+      const existing = newPop.find(r => r.antType.id === antTypeId);
+      if (existing) {
+        newPop = newPop.map(r => r.antType.id === antTypeId ? { ...r, population: r.population + hatched } : r);
+      } else {
+        const antType = state.antTypes.find(at => at.id === antTypeId);
+        if (antType) newPop = [...newPop, { antType, population: hatched }];
+      }
+    }
+
+    set({ foodAmount: newFood, population: newPop, eggInventory: newEggs });
+  },
+
+  unlockAntType: async (username: string, antTypeId: number) => {
+    const res = await axios.post(SERVER_BASE_URL + "game/unlock/ant_type", { username, ant_type_id: antTypeId });
+    const { success, message } = res.data;
+    if (success) {
+      // Sync food from server (deduction happened server-side)
+      const gameRes = await axios.get(SERVER_BASE_URL + "game/get/data", { params: { username } });
+      const colony = gameRes.data.state.colony;
+      set((state) => ({
+        foodAmount: colony.food_amount,
+        unlockedAntTypeIds: [...state.unlockedAntTypeIds, antTypeId],
+      }));
+    }
+    return { success, message };
+  },
+
+  recruitAnts: (antTypeId: number, count: number) => {
+    const { antTypes, foodAmount, eggInventory } = get();
+    const antType = antTypes.find((at) => at.id === antTypeId);
+    if (!antType || count <= 0) return;
+
+    const totalCost = count * EGG_FOOD_COST;
+    if (foodAmount < totalCost) return;
+
+    set({
+      foodAmount: foodAmount - totalCost,
+      eggInventory: {
+        ...eggInventory,
+        [antTypeId]: (eggInventory[antTypeId] ?? 0) + count,
+      },
+    });
   },
 
   getAttackRate: () => get().population.reduce((s, r) => s + r.population * r.antType.attack, 0),
@@ -306,6 +471,60 @@ export const useGameStore = create<GameState>((set, get) => ({
   getForagingRate: () => get().population.reduce((s, r) => s + r.population * r.antType.foraging, 0),
   getHungerRate: () => get().population.reduce((s, r) => s + r.population * r.antType.hunger_cost, 0),
   getTotalPopulation: () => get().population.reduce((s, r) => s + r.population, 0),
+  getHousingCapacity: () => {
+    let count = 0;
+    for (const rowTiles of Object.values(get().map)) {
+      for (const tile of Object.values(rowTiles)) {
+        if (tile.type === "nesting_chamber" && tile.completion === null) count++;
+      }
+    }
+    return count * CAPACITY_PER_CHAMBER;
+  },
+
+  getPopulationRatePerHour: () => {
+    const { map, population, airQuality, foodAmount, eggInventory } = get();
+    const pm = airQuality;
+
+    // Decay contribution
+    let decayRate = pm <= 20 ? 0 : pm <= 150.4 ? DECAY_RATE_PER_SECOND : SEVERE_DECAY_RATE_PER_SECOND;
+    const foragingRate = get().getForagingRate();
+    const hungerRate = get().getHungerRate();
+    if (foodAmount === 0 && hungerRate > foragingRate) decayRate += STARVATION_RATE_PER_SECOND;
+    const totalPop = population.reduce((s, r) => s + r.population, 0);
+    const decayPerHour = totalPop * decayRate * 3600;
+
+    // Hatch contribution
+    const hatchMultiplier =
+      pm <= 20    ? 1.0 :
+      pm <= 35.4  ? 0.7 :
+      pm <= 55.4  ? 0.5 :
+      pm <= 150.4 ? 0.3 : 0.1;
+
+    const chambersByType: Record<number, number> = {};
+    let totalChambers = 0;
+    for (const rowTiles of Object.values(map)) {
+      for (const tile of Object.values(rowTiles)) {
+        if (tile.type === "nesting_chamber" && tile.completion === null && tile.antTypeId !== undefined) {
+          chambersByType[tile.antTypeId] = (chambersByType[tile.antTypeId] ?? 0) + 1;
+          totalChambers++;
+        }
+      }
+    }
+
+    const housingCapacity = totalChambers * CAPACITY_PER_CHAMBER;
+    const availableCapacity = Math.max(0, housingCapacity - totalPop);
+    let hatchPerHour = 0;
+    if (availableCapacity > 0) {
+      for (const [antTypeIdStr, chamberCount] of Object.entries(chambersByType)) {
+        const antTypeId = Number(antTypeIdStr);
+        if ((eggInventory[antTypeId] ?? 0) > 0) {
+          hatchPerHour += HATCH_RATE_BASE * hatchMultiplier * chamberCount * 3600;
+        }
+      }
+    }
+
+    return hatchPerHour - decayPerHour;
+  },
 
   saveTimestamp: () => {
     set({ lastUpdate: Math.floor(Date.now() / 1000) });

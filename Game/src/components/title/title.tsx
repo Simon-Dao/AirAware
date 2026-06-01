@@ -19,7 +19,7 @@ function Title() {
   const [errorText, setErrorText] = useState<string>("");
   return (
     <div className="w-screen h-screen flex items-center justify-center flex-col">
-      <h1 className="bg-green">Game Title</h1>
+      <h1 className="bg-green">Antmosphere</h1>
       <form
         onSubmit={async (e) => {
           e.preventDefault();

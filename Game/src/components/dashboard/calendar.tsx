@@ -7,10 +7,14 @@ function toApiDate(d: Date) {
   return d.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
-function Calendar() {
+type Props = {
+  onDateChange?: (d: Date) => void;
+};
+
+function Calendar({ onDateChange }: Props) {
   const username = useSessionStore((s) => s.username);
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
-  const [activeDays, setActiveDays] = useState<Set<number>>(new Set());
+  const [dayCounts, setDayCounts] = useState<Map<number, number>>(new Map());
 
   const monthYear = currentDate.toLocaleString("default", {
     month: "long",
@@ -33,8 +37,12 @@ function Calendar() {
         })
         .then((res) => {
           const readings = res.data as { timestamp: string }[];
-          const days = new Set(readings.map((r) => new Date(r.timestamp).getDate()));
-          setActiveDays(days);
+          const counts = new Map<number, number>();
+          for (const r of readings) {
+            const d = new Date(r.timestamp).getDate();
+            counts.set(d, (counts.get(d) ?? 0) + 1);
+          }
+          setDayCounts(counts);
         });
     };
 
@@ -59,6 +67,16 @@ function Calendar() {
 
   const calendarDays = Array.from({ length: daysInMonth }, (_, i) => i + 1);
 
+  const maxCount = Math.max(1, ...dayCounts.values());
+
+  function dayBgColor(count: number): string {
+    if (count === 0) return "#111111";
+    // map count to a green lightness: few = dark (15%), many = bright (55%)
+    const t = count / maxCount;
+    const lightness = Math.round(15 + t * 40);
+    return `hsl(142, 60%, ${lightness}%)`;
+  }
+
   return (
     <div className="w-full h-full flex flex-col">
       {/* Month Selector */}
@@ -76,15 +94,21 @@ function Calendar() {
       <div className="w-full h-full mt-2 flex items-center justify-center">
         <div className="grid grid-cols-7 gap-2">
           {calendarDays.map((day) => {
-            const hasData = activeDays.has(day);
+            const count = dayCounts.get(day) ?? 0;
             const isToday = isCurrentMonth && day === today.getDate();
             return (
               <div
                 key={day}
                 className={`flex justify-center items-center cursor-pointer border w-9 h-9 text-sm rounded
-                  ${isToday ? "border-blue-400" : ""}
-                  ${hasData ? "bg-green-700 text-white" : "bg-[#111111] opacity-50"}
+                  ${isToday ? "border-blue-400" : "border-transparent"}
+                  ${count === 0 ? "opacity-50" : "text-white"}
                 `}
+                style={{ backgroundColor: dayBgColor(count) }}
+                onClick={() => {
+                  const selected = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+                  setCurrentDate(selected);
+                  onDateChange?.(selected);
+                }}
               >
                 {day}
               </div>

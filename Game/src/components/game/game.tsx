@@ -7,6 +7,7 @@ import {
   useUIStore,
   type SelectedAction,
 } from "../../state/uiState";
+import { EGG_FOOD_COST } from "../../state/constants";
 
 function pmToQuality(pm: number): { label: string; color: string } {
   if (pm <= 20) return { label: "Good", color: "text-green-400" };
@@ -19,33 +20,66 @@ function pmToQuality(pm: number): { label: string; color: string } {
 function formatFood(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
   if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
-  return String(n);
+  return String(Math.floor(n));
 }
 
-const ACTIONS: { action: SelectedAction; label: string }[] = [
-  { action: "dig", label: "Dig Tunnel" },
-  { action: "fill", label: "Fill Tunnel" },
+const ACTIONS: { action: SelectedAction; label: string; activeColor: string }[] = [
+  { action: "dig",  label: "Dig Tunnel",    activeColor: "!bg-blue-600" },
+  { action: "fill", label: "Fill Tunnel",   activeColor: "!bg-green-600" },
+  { action: "nest", label: "Nest Chamber",  activeColor: "!bg-purple-600" },
 ];
 
 export default function Game() {
   const [dashboardOpen, setDashboard] = useState(false);
+  const [recruitOpen, setRecruitOpen] = useState(false);
+  const [recruitAntTypeId, setRecruitAntTypeId] = useState<number | null>(null);
+  const [recruitCount, setRecruitCount] = useState(10);
+
+  // Nest modal — opens when user clicks a tunnel tile in "nest" mode
+  const [nestModal, setNestModal] = useState<{ row: number; col: number } | null>(null);
+  const [nestAntTypeId, setNestAntTypeId] = useState<number | null>(null);
+
   const [zoom, setZoom] = useState(1);
   const { username } = useSessionStore();
-  const { saveGame, airQualityHistory, population, foodAmount } =
-    useGameStore();
-  const {selectedAction, setUIState } = useUIStore();
+  const {
+    saveGame, airQualityHistory, population, antTypes, unlockedAntTypeIds,
+    eggInventory, foodAmount, pollAirQuality, recruitAnts, unlockAntType,
+    convertToNestingChamber, getHousingCapacity, getPopulationRatePerHour,
+  } = useGameStore();
+  const { selectedAction, setUIState } = useUIStore();
 
   // Latest valid hourly PM average
-  const latestPm =
-    [...airQualityHistory].reverse().find((v) => v !== -1) ?? null;
+  const latestPm = [...airQualityHistory].reverse().find((v) => v !== -1) ?? null;
   const quality = latestPm !== null ? pmToQuality(latestPm) : null;
 
   const totalPopulation = Math.round(population.reduce((sum, r) => sum + r.population, 0));
+  const totalEggs = Object.values(eggInventory).reduce((s, v) => s + v, 0);
+  const housingCapacity = getHousingCapacity();
+  const housingColor =
+    housingCapacity === 0              ? "text-neutral-400" :
+    totalPopulation >= housingCapacity ? "text-red-400" :
+    totalPopulation >= housingCapacity * 0.8 ? "text-yellow-400" : "text-green-400";
+
+  const ratePerHour = getPopulationRatePerHour();
+  const rateLabel = ratePerHour === 0 ? "±0/hr"
+    : ratePerHour > 0 ? `+${ratePerHour.toFixed(1)}/hr`
+    : `${ratePerHour.toFixed(1)}/hr`;
+  const rateColor = ratePerHour > 0 ? "text-green-400" : ratePerHour < 0 ? "text-red-400" : "text-neutral-400";
 
   useEffect(() => {
-    const id = setInterval(() => useGameStore.getState().tick(1), 1000);
-    return () => clearInterval(id);
+    const tickId = setInterval(() => useGameStore.getState().tick(1), 1000);
+    const pollId = setInterval(() => pollAirQuality(username), 30_000);
+    pollAirQuality(username);
+    return () => {
+      clearInterval(tickId);
+      clearInterval(pollId);
+    };
   }, []);
+
+  // Types that have eggs available — for the nest modal
+  const typesWithEggs = antTypes.filter(
+    (at) => unlockedAntTypeIds.includes(at.id) && (eggInventory[at.id] ?? 0) >= 1
+  );
 
   return (
     <div className="w-screen h-screen relative overflow-hidden">
@@ -61,63 +95,238 @@ export default function Game() {
         {/* Stats */}
         <div className="flex items-center gap-4 text-xs text-white bg-black/30 backdrop-blur px-3 py-1.5 rounded-md">
           <span>
-            AQ{" "}
-            <span className={quality?.color ?? "text-neutral-400"}>
-              {quality?.label ?? "—"}
-            </span>
+            AQ <span className={quality?.color ?? "text-neutral-400"}>{quality?.label ?? "—"}</span>
           </span>
-          <span>🐜 {totalPopulation}</span>
+          <span>🐜 {totalPopulation} <span className={rateColor}>({rateLabel})</span></span>
+          <span className={housingColor}>🏠 {totalPopulation}/{housingCapacity} cap</span>
+          <span>🥚 {Math.floor(totalEggs)}</span>
           <span>🍯 {formatFood(foodAmount)}</span>
         </div>
 
-        {/* Zoom Controls */}
+        {/* Toolbar */}
         <div className="flex items-center gap-1 bg-black/30 backdrop-blur rounded-md overflow-hidden">
-          <button
-            onClick={() => setZoom((z) => Math.max(0.5, z - 0.1))}
-            className="px-2 py-1 text-white hover:bg-black/40"
-          >
-            −
-          </button>
+          <button onClick={() => setZoom((z) => Math.max(0.5, z - 0.1))} className="px-2 py-1 text-white hover:bg-black/40">−</button>
+          <span className="text-xs text-white px-1">{(zoom * 100).toFixed(0)}%</span>
+          <button onClick={() => setZoom((z) => Math.min(3, z + 0.1))} className="px-2 py-1 text-white hover:bg-black/40">+</button>
 
-          <span className="text-xs text-white px-1">
-            {(zoom * 100).toFixed(0)}%
-          </span>
-
-          <button
-            onClick={() => setZoom((z) => Math.min(3, z + 0.1))}
-            className="px-2 py-1 text-white hover:bg-black/40"
-          >
-            +
-          </button>
-          {ACTIONS.map(({ action, label }) => (
+          {ACTIONS.map(({ action, label, activeColor }) => (
             <button
               key={action}
-              onClick={() =>
-                setUIState({
-                  selectedAction: selectedAction === action ? "none" : action,
-                })
-              }
+              onClick={() => setUIState({ selectedAction: selectedAction === action ? "none" : action })}
               className={`px-2 py-1 text-xs transition-colors ${
-                selectedAction === action
-                  ? action === "fill" ? "!bg-green-600 text-white" : "!bg-blue-600 text-white"
-                  : "text-white hover:bg-black/40"
+                selectedAction === action ? `${activeColor} text-white` : "text-white hover:bg-black/40"
               }`}
             >
               {label}
             </button>
           ))}
+
           <button
-            onClick={() => saveGame(username)}
+            onClick={() => {
+              setRecruitAntTypeId(antTypes.find(at => unlockedAntTypeIds.includes(at.id))?.id ?? null);
+              setRecruitCount(10);
+              setRecruitOpen(true);
+            }}
             className="px-2 py-1 text-white hover:bg-black/40"
           >
-            Save Game
+            + Recruit
+          </button>
+          <button onClick={() => saveGame(username)} className="px-2 py-1 text-white hover:bg-black/40">
+            Save
           </button>
         </div>
       </div>
 
+      {/* ── Recruit / Unlock Modal ── */}
+      {recruitOpen && (() => {
+        const unlockedTypes = antTypes.filter((at) => unlockedAntTypeIds.includes(at.id));
+        const lockedTypes   = antTypes.filter((at) => !unlockedAntTypeIds.includes(at.id));
+        const selectedType  = antTypes.find((a) => a.id === recruitAntTypeId);
+        const eggsAfter     = recruitCount * EGG_FOOD_COST;
+        const canRecruit    = foodAmount >= eggsAfter;
+
+        return (
+          <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+            <div className="bg-neutral-900 border border-neutral-700 rounded-xl p-6 w-96 flex flex-col gap-4 text-white">
+              <h2 className="text-lg font-semibold">Ant Colony</h2>
+
+              {/* Egg inventory summary */}
+              {Object.keys(eggInventory).length > 0 && (
+                <div className="flex flex-wrap gap-2 text-xs bg-neutral-800 rounded p-2">
+                  {antTypes.filter(at => (eggInventory[at.id] ?? 0) > 0).map(at => (
+                    <span key={at.id} className="text-neutral-300">
+                      {at.name}: <span className="text-white font-medium">{Math.floor(eggInventory[at.id] ?? 0)} 🥚</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Recruit section */}
+              {unlockedTypes.length > 0 && (
+                <div className="flex flex-col gap-3">
+                  <p className="text-xs text-neutral-400 uppercase tracking-wide">Recruit Eggs</p>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-neutral-400">Ant Type</label>
+                    <select
+                      value={recruitAntTypeId ?? ""}
+                      onChange={(e) => setRecruitAntTypeId(Number(e.target.value))}
+                      className="bg-neutral-800 border border-neutral-600 rounded px-2 py-1.5 text-sm"
+                    >
+                      {unlockedTypes.map((at) => (
+                        <option key={at.id} value={at.id}>{at.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {selectedType && unlockedAntTypeIds.includes(selectedType.id) && (
+                    <div className="text-xs text-neutral-400 bg-neutral-800 rounded p-2 grid grid-cols-2 gap-1">
+                      <span>Foraging: <span className="text-white">{selectedType.foraging}</span></span>
+                      <span>Mining: <span className="text-white">{selectedType.mining}</span></span>
+                      <span>Hunger: <span className="text-white">{selectedType.hunger_cost}</span></span>
+                      <span>Attack: <span className="text-white">{selectedType.attack}</span></span>
+                    </div>
+                  )}
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs text-neutral-400">Number of Eggs</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={recruitCount}
+                      onChange={(e) => setRecruitCount(Math.max(1, Number(e.target.value)))}
+                      className="bg-neutral-800 border border-neutral-600 rounded px-2 py-1.5 text-sm"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <span className={`text-xs ${canRecruit ? "text-neutral-400" : "text-red-400"}`}>
+                      Cost: 🍯 {eggsAfter} food
+                    </span>
+                    <button
+                      onClick={() => {
+                        if (recruitAntTypeId !== null) recruitAnts(recruitAntTypeId, recruitCount);
+                        setRecruitOpen(false);
+                      }}
+                      disabled={!canRecruit}
+                      className="px-3 py-1.5 text-sm rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Get Eggs
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Unlock section */}
+              {lockedTypes.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <p className="text-xs text-neutral-400 uppercase tracking-wide">Unlock New Types</p>
+                  {lockedTypes.map((at) => (
+                    <div key={at.id} className="flex items-center justify-between bg-neutral-800 rounded p-2 text-sm">
+                      <div className="flex flex-col">
+                        <span className="font-medium">{at.name}</span>
+                        <span className="text-xs text-neutral-400">
+                          Foraging {at.foraging} · Mining {at.mining} · Hunger {at.hunger_cost} · Attack {at.attack}
+                        </span>
+                      </div>
+                      <button
+                        onClick={async () => {
+                          const { success, message } = await unlockAntType(username, at.id);
+                          if (!success) alert(message);
+                        }}
+                        disabled={foodAmount < at.unlock_cost}
+                        className="ml-3 shrink-0 px-2 py-1 text-xs rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        🍯 {formatFood(at.unlock_cost)}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setRecruitOpen(false)}
+                  className="px-3 py-1.5 text-sm rounded bg-neutral-700 hover:bg-neutral-600"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── Nest Chamber Modal ── */}
+      {nestModal && (
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-neutral-900 border border-neutral-700 rounded-xl p-6 w-80 flex flex-col gap-4 text-white">
+            <h2 className="text-lg font-semibold">Convert to Nesting Chamber</h2>
+            <p className="text-xs text-neutral-400">Costs 30 food. Assign an ant type whose eggs will hatch here (10/hr at good air quality).</p>
+
+            {typesWithEggs.length === 0 ? (
+              <p className="text-sm text-red-400">No eggs available. Recruit eggs first.</p>
+            ) : (
+              <>
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs text-neutral-400">Ant Type</label>
+                  <select
+                    value={nestAntTypeId ?? ""}
+                    onChange={(e) => setNestAntTypeId(Number(e.target.value))}
+                    className="bg-neutral-800 border border-neutral-600 rounded px-2 py-1.5 text-sm"
+                  >
+                    {typesWithEggs.map((at) => (
+                      <option key={at.id} value={at.id}>
+                        {at.name} ({Math.floor(eggInventory[at.id] ?? 0)} eggs)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => setNestModal(null)}
+                    className="px-3 py-1.5 text-sm rounded bg-neutral-700 hover:bg-neutral-600"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (nestAntTypeId !== null) {
+                        convertToNestingChamber(nestModal.row, nestModal.col, nestAntTypeId);
+                      }
+                      setNestModal(null);
+                    }}
+                    disabled={foodAmount < 30}
+                    className="px-3 py-1.5 text-sm rounded bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Convert (30 🍯)
+                  </button>
+                </div>
+              </>
+            )}
+
+            {typesWithEggs.length === 0 && (
+              <button
+                onClick={() => setNestModal(null)}
+                className="self-end px-3 py-1.5 text-sm rounded bg-neutral-700 hover:bg-neutral-600"
+              >
+                Close
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {dashboardOpen && <Dashboard setDashboard={setDashboard} />}
 
-      <GameCanvas zoom={zoom} />
+      <GameCanvas
+        zoom={zoom}
+        onNestClick={(row, col) => {
+          setNestAntTypeId(typesWithEggs[0]?.id ?? null);
+          setNestModal({ row, col });
+        }}
+      />
     </div>
   );
 }

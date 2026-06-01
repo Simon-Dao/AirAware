@@ -3,36 +3,149 @@ import { useGameStore } from "../../state/gameState";
 import { useUIStore } from "../../state/uiState";
 import { TILE_COMPLETION_MS } from "../../state/constants";
 
-type GameCanvasProps = {
-  zoom: number;
+// ── World constants ──────────────────────────────────────────────────────────
+const GS        = 30;           // grid size (px)
+const SURFACE_H = 300;
+const WORLD_W   = 3000;
+const WORLD_H   = 2200;
+const WALK_Y    = SURFACE_H - 8; // y-coord where surface ants walk
+
+// ── Ant movement constants ───────────────────────────────────────────────────
+const SPD_TUNNEL   = 42;        // max px/sec underground
+const SPD_SURFACE  = 58;        // max px/sec on surface
+const STEER        = 260;       // steering acceleration px/sec²
+const ARRIVE_R2    = 12 * 12;   // squared arrival radius for tile center
+
+// ── Bug constants ────────────────────────────────────────────────────────────
+const MAX_BUGS      = 4;
+const BUG_SPD       = 28;
+const BUG_HP        = 2.5;
+const BUG_W = 7, BUG_H = 5;
+const ANT_W = 5, ANT_H = 3;
+
+const ANT_COLORS = ["#2a1a10", "#1a0d05", "#3c2112", "#201008"];
+
+// ── Types ────────────────────────────────────────────────────────────────────
+type TileMap = Record<number, Record<number, { type: string; completion: number | null }>>;
+
+type VAnt = {
+  x: number; y: number;
+  vx: number; vy: number;
+  row: number; col: number;     // current tile
+  tRow: number; tCol: number;   // target tile (tunnel)
+  state: "tunnel" | "surface" | "returning";
+  surfaceTimer: number;
+  wanderAngle: number;          // smoothly-drifting heading on surface
+  carrying: boolean;
+  color: string;
+  fightTimer: number;
 };
 
-function GameCanvas({ zoom }: GameCanvasProps) {
+type VBug = {
+  x: number; y: number;
+  vx: number;
+  hp: number;
+  dirTimer: number;
+  deadTimer: number;
+};
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function isOpen(map: TileMap, r: number, c: number): boolean {
+  const t = map[r]?.[c];
+  return !!t && t.completion === null && (t.type === "tunnel" || t.type === "nesting_chamber");
+}
+
+function adjOpen(map: TileMap, r: number, c: number): [number, number][] {
+  return ([ [-1,0],[1,0],[0,-1],[0,1] ] as [number,number][])
+    .map(([dr, dc]) => [r + dr, c + dc] as [number, number])
+    .filter(([nr, nc]) => isOpen(map, nr, nc));
+}
+
+function findEntrance(map: TileMap): [number, number] | null {
+  const row0 = map[0];
+  if (!row0) return null;
+  for (const ck of Object.keys(row0).sort((a, b) => +a - +b)) {
+    const t = row0[+ck];
+    if (t?.completion === null && (t.type === "tunnel" || t.type === "nesting_chamber"))
+      return [0, +ck];
+  }
+  return null;
+}
+
+// Clamp velocity magnitude to maxSpd
+function clampSpd(ant: VAnt, maxSpd: number) {
+  const spd = Math.sqrt(ant.vx * ant.vx + ant.vy * ant.vy);
+  if (spd > maxSpd) { ant.vx = ant.vx / spd * maxSpd; ant.vy = ant.vy / spd * maxSpd; }
+}
+
+// Steer toward (dx, dy) with arrival slowdown when dist2 < slowR2
+function steerToward(ant: VAnt, dx: number, dy: number, maxSpd: number, dt: number, dist2: number, slowR2: number) {
+  const dist = Math.sqrt(dist2);
+  const spd = dist2 < slowR2 ? maxSpd * (dist / Math.sqrt(slowR2)) : maxSpd;
+  const inv = 1 / (dist || 1);
+  const dvx = dx * inv * spd - ant.vx;
+  const dvy = dy * inv * spd - ant.vy;
+  const steerMag = Math.sqrt(dvx * dvx + dvy * dvy);
+  const maxS = STEER * dt;
+  if (steerMag > maxS) {
+    ant.vx += dvx / steerMag * maxS;
+    ant.vy += dvy / steerMag * maxS;
+  } else {
+    ant.vx += dvx;
+    ant.vy += dvy;
+  }
+}
+
+function makeAnt(map: TileMap): VAnt | null {
+  const ent = findEntrance(map);
+  if (!ent) return null;
+  const [er, ec] = ent;
+  const adj = adjOpen(map, er, ec);
+  const [tr, tc] = adj.length > 0 ? adj[Math.floor(Math.random() * adj.length)] : [er, ec];
+  return {
+    x: ec * GS + GS / 2, y: er * GS + SURFACE_H + GS / 2,
+    vx: 0, vy: 0,
+    row: er, col: ec, tRow: tr, tCol: tc,
+    state: "tunnel",
+    surfaceTimer: 0,
+    wanderAngle: (Math.random() - 0.5) * Math.PI,
+    carrying: false,
+    color: ANT_COLORS[Math.floor(Math.random() * ANT_COLORS.length)],
+    fightTimer: 0,
+  };
+}
+
+function makeBug(): VBug {
+  return {
+    x: Math.random() * WORLD_W, y: WALK_Y,
+    vx: (Math.random() - 0.5) * BUG_SPD * 2,
+    hp: BUG_HP, dirTimer: 2 + Math.random() * 3, deadTimer: 0,
+  };
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+type GameCanvasProps = { zoom: number; onNestClick: (row: number, col: number) => void };
+
+function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
   const { digTunnel, fillTunnel, cancelTile, completePendingTiles } = useGameStore();
   const { selectedAction } = useUIStore();
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const canvasRef  = useRef<HTMLCanvasElement | null>(null);
+  const onNestRef  = useRef(onNestClick);
+  onNestRef.current = onNestClick;
 
-  const WORLD_WIDTH = 3000;
-  const WORLD_HEIGHT = 2200;
-  const SURFACE_HEIGHT = 300;
-  const GRID_SIZE = 30;
+  // Visual simulation state — persists across zoom-triggered effect re-runs
+  const antsRef    = useRef<VAnt[]>([]);
+  const bugsRef    = useRef<VBug[]>([]);
+  const entraceRef = useRef<[number, number] | null>(null); // cached entrance
+  const entraceAge = useRef(0);
 
-  const NUM_GRID_X = Math.floor(WORLD_WIDTH / GRID_SIZE);
-
-  const camera = useRef({ x: WORLD_WIDTH / 2, y: 0 });
+  const camera     = useRef({ x: WORLD_W / 2, y: 0 });
   const isDragging = useRef(false);
   const isPainting = useRef(false);
-  const lastMouse = useRef({ x: 0, y: 0 });
+  const lastMouse  = useRef({ x: 0, y: 0 });
+  const keys = useRef({ ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false });
 
-  const keys = useRef({
-    ArrowUp: false,
-    ArrowDown: false,
-    ArrowLeft: false,
-    ArrowRight: false,
-  });
-
-  // Update cursor when action changes
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -42,32 +155,176 @@ function GameCanvas({ zoom }: GameCanvasProps) {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
     const safeZoom = Math.max(0.5, zoom);
+    const NUM_X = Math.floor(WORLD_W / GS);
 
-    const clampCamera = (canvas: HTMLCanvasElement) => {
-      const viewWidth = canvas.width / safeZoom;
-      const viewHeight = canvas.height / safeZoom;
-
-      camera.current.x = Math.max(
-        0,
-        Math.min(camera.current.x, WORLD_WIDTH - viewWidth)
-      );
-      camera.current.y = Math.max(
-        0,
-        Math.min(camera.current.y, WORLD_HEIGHT - viewHeight)
-      );
+    const clampCamera = () => {
+      const vw = canvas.width / safeZoom, vh = canvas.height / safeZoom;
+      camera.current.x = Math.max(0, Math.min(camera.current.x, WORLD_W - vw));
+      camera.current.y = Math.max(0, Math.min(camera.current.y, WORLD_H - vh));
     };
 
-    // Always reads fresh map from store — no stale closure issues
+    // ── Ant simulation ──────────────────────────────────────────────────────
+    const updateAnts = (dt: number, map: TileMap, frame: number) => {
+      const ants = antsRef.current;
+      const bugs = bugsRef.current;
+
+      // Refresh cached entrance every 90 frames (~1.5s)
+      if (frame % 90 === 0) entraceRef.current = findEntrance(map);
+      const entrance = entraceRef.current;
+
+      // Scale visual count to population (1 visual ant per 2 real ants, max 50)
+      const totalPop = useGameStore.getState().getTotalPopulation();
+      const targetCount = Math.min(Math.floor(totalPop / 2), 50);
+      while (ants.length < targetCount) { const a = makeAnt(map); if (!a) break; ants.push(a); }
+      if (ants.length > targetCount) ants.length = targetCount;
+
+      for (const ant of ants) {
+        ant.fightTimer = Math.max(0, ant.fightTimer - dt);
+
+        // ── Tunnel mode ──
+        if (ant.state === "tunnel") {
+          const tx = ant.tCol * GS + GS / 2;
+          const ty = ant.tRow * GS + SURFACE_H + GS / 2;
+          const dx = tx - ant.x, dy = ty - ant.y;
+          const dist2 = dx * dx + dy * dy;
+
+          if (dist2 < ARRIVE_R2) {
+            // Arrived — choose next tile
+            ant.row = ant.tRow; ant.col = ant.tCol;
+            ant.x = tx; ant.y = ty;
+
+            const adj = adjOpen(map, ant.row, ant.col);
+            if (ant.row === 0 && Math.random() < 0.014) {
+              // Go to surface
+              ant.state = "surface";
+              ant.surfaceTimer = 9 + Math.random() * 12;
+              ant.wanderAngle  = (ant.vx >= 0 ? 0 : Math.PI) + (Math.random() - 0.5) * 0.4;
+              ant.carrying = false;
+            } else if (adj.length > 0) {
+              const [nr, nc] = adj[Math.floor(Math.random() * adj.length)];
+              ant.tRow = nr; ant.tCol = nc;
+            }
+          } else {
+            steerToward(ant, dx, dy, SPD_TUNNEL, dt, dist2, ARRIVE_R2 * 9);
+            clampSpd(ant, SPD_TUNNEL);
+            ant.x += ant.vx * dt;
+            ant.y += ant.vy * dt;
+          }
+
+          // If target tile was removed, pick a new one
+          if (!isOpen(map, ant.tRow, ant.tCol)) {
+            const adj = adjOpen(map, ant.row, ant.col);
+            if (adj.length > 0) { [ant.tRow, ant.tCol] = adj[Math.floor(Math.random() * adj.length)]; }
+            else if (entrance) { ant.row = entrance[0]; ant.col = entrance[1]; ant.tRow = entrance[0]; ant.tCol = entrance[1]; }
+          }
+
+        // ── Surface mode ──
+        } else if (ant.state === "surface") {
+          // Rise smoothly to walk level
+          const toSurf = WALK_Y - ant.y;
+          if (Math.abs(toSurf) > 1) {
+            ant.vy += toSurf * 14 * dt;
+          } else {
+            ant.y = WALK_Y;
+            ant.vy *= 0.85;
+          }
+
+          // Wander angle drifts slowly — gives organic lateral movement
+          ant.wanderAngle += (Math.random() - 0.5) * 3.5 * dt;
+          // Bias toward horizontal (clamp away from straight up/down)
+          ant.wanderAngle = Math.max(-Math.PI * 0.85, Math.min(Math.PI * 0.85, ant.wanderAngle));
+
+          const desiredVx = Math.cos(ant.wanderAngle) * SPD_SURFACE;
+          const dvx = desiredVx - ant.vx;
+          ant.vx += Math.sign(dvx) * Math.min(Math.abs(dvx), STEER * dt);
+
+          // Reverse wander at world edges
+          if (ant.x < 30 || ant.x > WORLD_W - 30) {
+            ant.wanderAngle = Math.PI - ant.wanderAngle;
+            ant.x = Math.max(30, Math.min(WORLD_W - 30, ant.x));
+          }
+
+          ant.x += ant.vx * dt;
+          ant.y += ant.vy * dt;
+          ant.surfaceTimer -= dt;
+          if (ant.surfaceTimer <= 0) { ant.state = "returning"; ant.carrying = false; }
+
+          // Mark carrying after a short surface delay
+          if (ant.surfaceTimer < 7) ant.carrying = true;
+
+          // Fight nearby bugs
+          for (const bug of bugs) {
+            if (bug.deadTimer > 0) continue;
+            const bx = bug.x - ant.x, by = bug.y - ant.y;
+            if (bx * bx + by * by < 28 * 28) {
+              bug.hp -= dt;
+              ant.fightTimer = 0.3;
+              if (bug.hp <= 0) bug.deadTimer = 10;
+            }
+          }
+
+        // ── Returning mode ──
+        } else {
+          if (!entrance) { ant.state = "tunnel"; continue; }
+          const [er, ec] = entrance;
+          const tx = ec * GS + GS / 2;
+          const dx = tx - ant.x;
+          const dist2 = dx * dx + (WALK_Y - ant.y) * (WALK_Y - ant.y);
+
+          // Steer toward entrance x on the surface
+          const dvx = Math.sign(dx) * SPD_SURFACE - ant.vx;
+          ant.vx += Math.sign(dvx) * Math.min(Math.abs(dvx), STEER * dt);
+          ant.vy += (WALK_Y - ant.y) * 14 * dt;
+          ant.vy *= 0.85;
+          clampSpd(ant, SPD_SURFACE);
+          ant.x += ant.vx * dt;
+          ant.y += ant.vy * dt;
+          ant.carrying = false;
+
+          // Enter tunnel when close to entrance
+          if (dist2 < 16 * 16 && isOpen(map, er, ec)) {
+            ant.state = "tunnel";
+            ant.row = er; ant.col = ec;
+            ant.x = tx; ant.y = er * GS + SURFACE_H + GS / 2;
+            const adj = adjOpen(map, er, ec);
+            if (adj.length > 0) { [ant.tRow, ant.tCol] = adj[Math.floor(Math.random() * adj.length)]; }
+          }
+        }
+      }
+    };
+
+    // ── Bug simulation ──────────────────────────────────────────────────────
+    const updateBugs = (dt: number) => {
+      const bugs = bugsRef.current;
+      while (bugs.length < MAX_BUGS) bugs.push(makeBug());
+
+      for (const bug of bugs) {
+        if (bug.deadTimer > 0) {
+          bug.deadTimer -= dt;
+          if (bug.deadTimer <= 0) {
+            bug.x = Math.random() * WORLD_W; bug.y = WALK_Y;
+            bug.hp = BUG_HP; bug.vx = (Math.random() - 0.5) * BUG_SPD * 2;
+            bug.dirTimer = 2 + Math.random() * 3;
+          }
+          continue;
+        }
+        bug.x = Math.max(0, Math.min(WORLD_W, bug.x + bug.vx * dt));
+        bug.dirTimer -= dt;
+        if (bug.dirTimer <= 0 || bug.x <= 0 || bug.x >= WORLD_W) {
+          bug.vx = (Math.random() - 0.5) * BUG_SPD * 2;
+          bug.dirTimer = 2 + Math.random() * 4;
+        }
+      }
+    };
+
+    // ── Draw ────────────────────────────────────────────────────────────────
     const draw = () => {
-      const map = useGameStore.getState().map;
-
+      const map = useGameStore.getState().map as TileMap;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-
       ctx.fillStyle = "#87CEEB";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -75,222 +332,191 @@ function GameCanvas({ zoom }: GameCanvasProps) {
       ctx.scale(safeZoom, safeZoom);
       ctx.translate(-camera.current.x, -camera.current.y);
 
+      // Grass + dirt
       ctx.fillStyle = "green";
-      ctx.fillRect(0, SURFACE_HEIGHT - 5, WORLD_WIDTH, 10);
-
+      ctx.fillRect(0, SURFACE_H - 5, WORLD_W, 10);
       ctx.fillStyle = "#8B5A2B";
-      ctx.fillRect(0, SURFACE_HEIGHT, WORLD_WIDTH, WORLD_HEIGHT - SURFACE_HEIGHT);
+      ctx.fillRect(0, SURFACE_H, WORLD_W, WORLD_H - SURFACE_H);
 
+      // Tiles
       const now = Date.now();
       for (let i = 0; i < 66; i++) {
-        for (let j = 0; j < NUM_GRID_X; j++) {
-          const x = j * GRID_SIZE;
-          const y = i * GRID_SIZE + SURFACE_HEIGHT;
+        for (let j = 0; j < NUM_X; j++) {
+          const x = j * GS, y = i * GS + SURFACE_H;
           const tile = map[i]?.[j];
+          const pending = tile?.completion != null && tile.completion > now;
 
-          const isPending = tile?.completion !== null && tile?.completion !== undefined && tile.completion > now;
-
-          if (isPending) {
-            const isDig = tile.type === "tunnel";
-            ctx.fillStyle = isDig ? "#3d0a0a" : "#1a3d0a";
-            ctx.fillRect(x, y, GRID_SIZE, GRID_SIZE);
-
-            // Progress bar
-            const progress = 1 - (tile.completion! - now) / TILE_COMPLETION_MS;
-            ctx.fillStyle = isDig ? "#f87171" : "#4ade80";
-            ctx.fillRect(x + 1, y + GRID_SIZE - 5, (GRID_SIZE - 2) * progress, 4);
+          if (pending) {
+            const prog = 1 - (tile.completion! - now) / TILE_COMPLETION_MS;
+            if (tile.type === "nesting_chamber") {
+              ctx.fillStyle = "#2d1040"; ctx.fillRect(x, y, GS, GS);
+              ctx.fillStyle = "#a855f7"; ctx.fillRect(x + 1, y + GS - 5, (GS - 2) * prog, 4);
+            } else {
+              const dig = tile.type === "tunnel";
+              ctx.fillStyle = dig ? "#3d0a0a" : "#1a3d0a"; ctx.fillRect(x, y, GS, GS);
+              ctx.fillStyle = dig ? "#f87171" : "#4ade80"; ctx.fillRect(x + 1, y + GS - 5, (GS - 2) * prog, 4);
+            }
+          } else if (tile?.type === "nesting_chamber") {
+            ctx.fillStyle = "#2d1b4e"; ctx.fillRect(x, y, GS, GS);
+            ctx.fillStyle = "#6b46c1";
+            ctx.beginPath();
+            ctx.ellipse(x + GS / 2, y + GS / 2, GS * 0.32, GS * 0.22, 0, 0, Math.PI * 2);
+            ctx.fill();
           } else if (tile?.type === "tunnel") {
-            ctx.fillStyle = "#1a0a05";
-            ctx.fillRect(x, y, GRID_SIZE, GRID_SIZE);
+            ctx.fillStyle = "#1a0a05"; ctx.fillRect(x, y, GS, GS);
           } else {
-            const depth = i / 66;
-            const shade = Math.floor(160 - depth * 100);
-            ctx.fillStyle = `rgb(${shade}, ${shade * 0.7}, ${shade * 0.4})`;
-            ctx.fillRect(x, y, GRID_SIZE, GRID_SIZE);
+            const shade = Math.floor(160 - (i / 66) * 100);
+            ctx.fillStyle = `rgb(${shade},${shade * 0.7 | 0},${shade * 0.4 | 0})`;
+            ctx.fillRect(x, y, GS, GS);
           }
+        }
+      }
+
+      // Bugs
+      for (const bug of bugsRef.current) {
+        if (bug.deadTimer > 0) continue;
+        ctx.fillStyle = "#6b1010";
+        ctx.fillRect(bug.x - BUG_W / 2, bug.y - BUG_H / 2, BUG_W, BUG_H);
+        ctx.fillStyle = "#ff3333";
+        ctx.fillRect(bug.x - BUG_W / 2, bug.y - BUG_H / 2 - 4, BUG_W * (bug.hp / BUG_HP), 2);
+      }
+
+      // Ants
+      for (const ant of antsRef.current) {
+        ctx.fillStyle = ant.fightTimer > 0 ? "#cc2200" : ant.color;
+        ctx.fillRect(ant.x - ANT_W / 2, ant.y - ANT_H / 2, ANT_W, ANT_H);
+        if (ant.carrying) {
+          ctx.fillStyle = "#d4a835";
+          ctx.fillRect(ant.x - 1.5, ant.y - ANT_H / 2 - 3, 3, 3);
         }
       }
 
       ctx.strokeStyle = "yellow";
       ctx.lineWidth = 10 / safeZoom;
-      ctx.strokeRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-
+      ctx.strokeRect(0, 0, WORLD_W, WORLD_H);
       ctx.restore();
 
-      const gradient = ctx.createLinearGradient(
-        0,
-        canvas.height * 0.8,
-        0,
-        canvas.height
-      );
-      gradient.addColorStop(0, "rgba(0,0,0,0)");
-      gradient.addColorStop(1, "rgba(0,0,0,0.4)");
-      ctx.fillStyle = gradient;
+      // Vignette
+      const grad = ctx.createLinearGradient(0, canvas.height * 0.8, 0, canvas.height);
+      grad.addColorStop(0, "rgba(0,0,0,0)");
+      grad.addColorStop(1, "rgba(0,0,0,0.4)");
+      ctx.fillStyle = grad;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     };
 
-    const mouseToGrid = (e: MouseEvent) => {
-      const rect = canvas.getBoundingClientRect();
-      const worldX = (e.clientX - rect.left) / safeZoom + camera.current.x;
-      const worldY = (e.clientY - rect.top) / safeZoom + camera.current.y;
+    // ── Input ───────────────────────────────────────────────────────────────
+    const toGrid = (e: MouseEvent) => {
+      const r = canvas.getBoundingClientRect();
       return {
-        col: Math.floor(worldX / GRID_SIZE),
-        row: Math.floor((worldY - SURFACE_HEIGHT) / GRID_SIZE),
+        col: Math.floor(((e.clientX - r.left) / safeZoom + camera.current.x) / GS),
+        row: Math.floor(((e.clientY - r.top)  / safeZoom + camera.current.y - SURFACE_H) / GS),
       };
     };
 
-    const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      clampCamera(canvas);
-      draw();
-    };
-
+    const resize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; clampCamera(); draw(); };
     resize();
     window.addEventListener("resize", resize);
 
-    const handleMouseDown = (e: MouseEvent) => {
+    const onDown = (e: MouseEvent) => {
       if (e.button !== 0) return;
       const action = useUIStore.getState().selectedAction;
       lastMouse.current = { x: e.clientX, y: e.clientY };
-
       if (action === "dig" || action === "fill") {
         isPainting.current = true;
-        const { row, col } = mouseToGrid(e);
+        const { row, col } = toGrid(e);
+        if (row >= 0) action === "dig" ? digTunnel(row, col) : fillTunnel(row, col);
+      } else if (action === "nest") {
+        const { row, col } = toGrid(e);
         if (row >= 0) {
-          action === "dig" ? digTunnel(row, col) : fillTunnel(row, col);
-          draw();
+          const tile = useGameStore.getState().map[row]?.[col];
+          if (tile?.type === "tunnel" && tile.completion === null) onNestRef.current(row, col);
         }
-      } else {
-        isDragging.current = true;
-        canvas.style.cursor = "grabbing";
-      }
+      } else { isDragging.current = true; canvas.style.cursor = "grabbing"; }
     };
 
-    const handleMouseMove = (e: MouseEvent) => {
+    const onMove = (e: MouseEvent) => {
       if (isPainting.current) {
-        const { row, col } = mouseToGrid(e);
+        const { row, col } = toGrid(e);
         if (row >= 0) {
-          const action = useUIStore.getState().selectedAction;
-          action === "dig" ? digTunnel(row, col) : fillTunnel(row, col);
-          draw();
+          const a = useUIStore.getState().selectedAction;
+          a === "dig" ? digTunnel(row, col) : fillTunnel(row, col);
         }
       } else if (isDragging.current) {
-        const dx = e.clientX - lastMouse.current.x;
-        const dy = e.clientY - lastMouse.current.y;
-
-        camera.current.x -= dx / safeZoom;
-        camera.current.y -= dy / safeZoom;
-
-        clampCamera(canvas);
+        camera.current.x -= (e.clientX - lastMouse.current.x) / safeZoom;
+        camera.current.y -= (e.clientY - lastMouse.current.y) / safeZoom;
+        clampCamera();
         lastMouse.current = { x: e.clientX, y: e.clientY };
-        draw();
       }
     };
 
-    const handleMouseUp = () => {
-      isDragging.current = false;
-      isPainting.current = false;
-      const action = useUIStore.getState().selectedAction;
-      canvas.style.cursor = action === "none" ? "grab" : "crosshair";
+    const onUp = () => {
+      isDragging.current = false; isPainting.current = false;
+      canvas.style.cursor = useUIStore.getState().selectedAction === "none" ? "grab" : "crosshair";
     };
 
-    canvas.style.cursor = "grab";
-
-    const handleContextMenu = (e: MouseEvent) => {
+    const onCtx = (e: MouseEvent) => {
       e.preventDefault();
-      const { row, col } = mouseToGrid(e);
+      const { row, col } = toGrid(e);
       if (row >= 0) {
         const tile = useGameStore.getState().map[row]?.[col];
-        if (tile?.completion !== null && tile?.completion !== undefined && tile.completion > Date.now()) {
-          cancelTile(row, col);
-          draw();
-        }
+        if (tile?.completion != null && tile.completion > Date.now()) cancelTile(row, col);
       }
     };
 
-    canvas.addEventListener("mousedown", handleMouseDown);
-    canvas.addEventListener("contextmenu", handleContextMenu);
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
+    const onKD = (e: KeyboardEvent) => { if (e.key in keys.current) keys.current[e.key as keyof typeof keys.current] = true; };
+    const onKU = (e: KeyboardEvent) => { if (e.key in keys.current) keys.current[e.key as keyof typeof keys.current] = false; };
 
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key in keys.current) {
-        keys.current[e.key as keyof typeof keys.current] = true;
-      }
+    canvas.addEventListener("mousedown",   onDown);
+    canvas.addEventListener("contextmenu", onCtx);
+    window.addEventListener("mousemove",   onMove);
+    window.addEventListener("mouseup",     onUp);
+    window.addEventListener("keydown",     onKD);
+    window.addEventListener("keyup",       onKU);
+
+    // ── Main loop ────────────────────────────────────────────────────────────
+    const CAM_SPD = 10;
+    let lastCheck = 0, lastT = performance.now(), frame = 0;
+    let raf: number;
+
+    const loop = (now: number) => {
+      const dt = Math.min((now - lastT) / 1000, 0.05);
+      lastT = now;
+      frame++;
+
+      if (keys.current.ArrowUp)    camera.current.y -= CAM_SPD / safeZoom;
+      if (keys.current.ArrowDown)  camera.current.y += CAM_SPD / safeZoom;
+      if (keys.current.ArrowLeft)  camera.current.x -= CAM_SPD / safeZoom;
+      if (keys.current.ArrowRight) camera.current.x += CAM_SPD / safeZoom;
+      clampCamera();
+
+      const stamp = Date.now();
+      if (stamp - lastCheck > 100) { lastCheck = stamp; completePendingTiles(); }
+
+      const map = useGameStore.getState().map as TileMap;
+      updateAnts(dt, map, frame);
+      updateBugs(dt);
+      draw();
+
+      raf = requestAnimationFrame(loop);
     };
 
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key in keys.current) {
-        keys.current[e.key as keyof typeof keys.current] = false;
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
-
-    const speed = 10;
-    let animationFrame: number;
-    let lastCompletionCheck = 0;
-
-    const hasPendingTiles = () => {
-      const map = useGameStore.getState().map;
-      const now = Date.now();
-      for (const row of Object.values(map)) {
-        for (const tile of Object.values(row)) {
-          if (tile.completion !== null && tile.completion > now) return true;
-        }
-      }
-      return false;
-    };
-
-    const update = () => {
-      let moved = false;
-
-      if (keys.current.ArrowUp) { camera.current.y -= speed / safeZoom; moved = true; }
-      if (keys.current.ArrowDown) { camera.current.y += speed / safeZoom; moved = true; }
-      if (keys.current.ArrowLeft) { camera.current.x -= speed / safeZoom; moved = true; }
-      if (keys.current.ArrowRight) { camera.current.x += speed / safeZoom; moved = true; }
-
-      const now = Date.now();
-      if (now - lastCompletionCheck > 100) {
-        lastCompletionCheck = now;
-        completePendingTiles();
-      }
-
-      if (moved || hasPendingTiles()) {
-        clampCamera(canvas);
-        draw();
-      }
-
-      animationFrame = requestAnimationFrame(update);
-    };
-
-    update();
-
-    // Subscribe to map changes so the canvas redraws when tiles are added
-    const unsubscribe = useGameStore.subscribe(() => draw());
+    raf = requestAnimationFrame(loop);
+    const unsub = useGameStore.subscribe(() => draw());
 
     return () => {
-      window.removeEventListener("resize", resize);
-      canvas.removeEventListener("mousedown", handleMouseDown);
-      canvas.removeEventListener("contextmenu", handleContextMenu);
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
-      cancelAnimationFrame(animationFrame);
-      unsubscribe();
+      window.removeEventListener("resize",    resize);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup",   onUp);
+      window.removeEventListener("keydown",   onKD);
+      window.removeEventListener("keyup",     onKU);
+      canvas.removeEventListener("mousedown",   onDown);
+      canvas.removeEventListener("contextmenu", onCtx);
+      cancelAnimationFrame(raf);
+      unsub();
     };
   }, [zoom, digTunnel, fillTunnel, cancelTile, completePendingTiles]);
 
-  return (
-    <canvas
-      ref={canvasRef}
-      className="absolute inset-0"
-      style={{ background: "white" }}
-    />
-  );
+  return <canvas ref={canvasRef} className="absolute inset-0" style={{ background: "white" }} />;
 }
 
 export default GameCanvas;
