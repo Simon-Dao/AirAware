@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import Dashboard from "../dashboard/dashboard";
+import DevMode from "./DevMode";
 import GameCanvas from "./gameCanvas";
 import { useGameStore } from "../../state/gameState";
 import { useSessionStore } from "../../state/sessionState";
@@ -7,7 +8,11 @@ import {
   useUIStore,
   type SelectedAction,
 } from "../../state/uiState";
-import { EGG_FOOD_COST, HATCH_RATE_BASE, CAPACITY_PER_CHAMBER } from "../../state/constants";
+import {
+  EGG_FOOD_COST, HATCH_RATE_BASE, CAPACITY_PER_CHAMBER,
+  NATURAL_DECAY_RATE_PER_SECOND, DECAY_RATE_PER_SECOND, SEVERE_DECAY_RATE_PER_SECOND, STARVATION_RATE_PER_SECOND,
+  aqForagingMultiplier,
+} from "../../state/constants";
 
 function pmToQuality(pm: number): { label: string; color: string } {
   if (pm <= 20) return { label: "Good", color: "text-green-400" };
@@ -24,14 +29,15 @@ function formatFood(n: number): string {
 }
 
 const ACTIONS: { action: SelectedAction; label: string; activeColor: string }[] = [
-  { action: "dig",  label: "Dig Tunnel",    activeColor: "!bg-blue-600" },
-  { action: "fill", label: "Fill Tunnel",   activeColor: "!bg-green-600" },
-  { action: "nest", label: "Nest Chamber",  activeColor: "!bg-purple-600" },
+  { action: "dig",  label: "Dig",   activeColor: "!bg-blue-600" },
+  { action: "fill", label: "Fill",  activeColor: "!bg-green-600" },
+  { action: "nest", label: "Nest",  activeColor: "!bg-purple-600" },
 ];
 
 export default function Game() {
   const [dashboardOpen, setDashboard] = useState(false);
-  const [colonyOpen, setColonyOpen] = useState(false);
+  const [devModeOpen, setDevMode] = useState(false);
+  const [openPanel, setOpenPanel] = useState<"colony" | "popRate" | "foodRate" | null>(null);
   const [recruitOpen, setRecruitOpen] = useState(false);
   const [recruitAntTypeId, setRecruitAntTypeId] = useState<number | null>(null);
   const [recruitCount, setRecruitCount] = useState(10);
@@ -43,14 +49,16 @@ export default function Game() {
   const [zoom, setZoom] = useState(1);
   const { username } = useSessionStore();
   const {
-    saveGame, airQualityHistory, population, antTypes, unlockedAntTypeIds,
+    saveGame, airQualityHistory, airQuality, population, antTypes, unlockedAntTypeIds,
     eggInventory, foodAmount, map, pollAirQuality, recruitAnts, unlockAntType,
     convertToNestingChamber, getHousingCapacity, getPopulationRatePerHour,
   } = useGameStore();
   const { selectedAction, setUIState } = useUIStore();
 
-  // Latest valid hourly PM average
-  const latestPm = [...airQualityHistory].reverse().find((v) => v !== -1) ?? null;
+  // Latest valid PM: prefer the live-polled value, fall back to history
+  const latestPm = airQuality > 0
+    ? airQuality
+    : ([...airQualityHistory].reverse().find((v) => v !== -1) ?? null);
   const quality = latestPm !== null ? pmToQuality(latestPm) : null;
 
   const totalPopulation = Math.round(population.reduce((sum, r) => sum + r.population, 0));
@@ -71,7 +79,9 @@ export default function Game() {
     }
   }
 
-  const latestAq = [...airQualityHistory].reverse().find((v) => v !== -1) ?? 0;
+  const latestAq = airQuality > 0
+    ? airQuality
+    : ([...airQualityHistory].reverse().find((v) => v !== -1) ?? 0);
   const hatchMultiplier =
     latestAq <= 20    ? 1.0 :
     latestAq <= 35.4  ? 0.7 :
@@ -83,6 +93,19 @@ export default function Game() {
     : ratePerHour > 0 ? `+${ratePerHour.toFixed(1)}/hr`
     : `${ratePerHour.toFixed(1)}/hr`;
   const rateColor = ratePerHour > 0 ? "text-green-400" : ratePerHour < 0 ? "text-red-400" : "text-neutral-400";
+
+  // Food rate breakdown
+  const aqForagingMult  = aqForagingMultiplier(latestAq);
+  const baseForaging    = population.reduce((s, r) => s + r.population * r.antType.foraging, 0);
+  const totalForaging   = baseForaging * aqForagingMult;
+  const totalHunger     = population.reduce((s, r) => s + r.population * r.antType.hunger_cost, 0);
+  const netFoodPerSec   = totalForaging - totalHunger;
+
+  // Population rate breakdown
+  const housingAvailable  = Math.max(0, housingCapacity - totalPopulation);
+  const isStarving        = foodAmount === 0 && totalHunger > totalForaging;
+  const aqDecayPerSec     = latestAq > 150.4 ? SEVERE_DECAY_RATE_PER_SECOND : latestAq > 20 ? DECAY_RATE_PER_SECOND : 0;
+  const starvDecayPerSec  = isStarving ? STARVATION_RATE_PER_SECOND : 0;
 
   useEffect(() => {
     const tickId = setInterval(() => useGameStore.getState().tick(1), 1000);
@@ -101,22 +124,31 @@ export default function Game() {
   return (
     <div className="w-screen h-screen relative overflow-hidden">
       {/* HUD */}
-      <div className="absolute top-4 left-4 z-20 flex items-center gap-3">
+      <div className="absolute top-2 left-2 z-20 flex items-center gap-2">
         <button
           onClick={() => setDashboard(true)}
-          className="bg-black/40 hover:bg-black/60 backdrop-blur px-3 py-1.5 rounded-md text-xs text-white"
+          className="bg-black/40 hover:bg-black/60 backdrop-blur px-2 py-1 rounded text-[11px] text-white"
         >
-          Air Quality Dashboard
+          AQ Dashboard
+        </button>
+        <button
+          onClick={() => setDevMode(o => !o)}
+          className={`backdrop-blur px-2 py-1 rounded text-[11px] ${devModeOpen ? "bg-yellow-600 text-white" : "bg-black/40 hover:bg-black/60 text-yellow-400"}`}
+        >
+          Dev
         </button>
 
         {/* Stats */}
-        <div className="flex items-center gap-4 text-xs text-white bg-black/30 backdrop-blur px-3 py-1.5 rounded-md">
+        <div className="flex items-center gap-3 text-[11px] text-white bg-black/30 backdrop-blur px-2 py-1 rounded">
           <span>
             AQ <span className={quality?.color ?? "text-neutral-400"}>{quality?.label ?? "—"}</span>
           </span>
-          <span>🐜 {totalPopulation} <span className={rateColor}>({rateLabel})</span></span>
+          <span>🐜 {totalPopulation} <button
+            onClick={() => setOpenPanel(o => o === "popRate" ? null : "popRate")}
+            className={`${rateColor} hover:opacity-70 transition-opacity`}
+          >({rateLabel})</button></span>
           <button
-            onClick={() => setColonyOpen(o => !o)}
+            onClick={() => setOpenPanel(o => o === "colony" ? null : "colony")}
             className={`${housingColor} hover:opacity-80 transition-opacity`}
             title="Toggle colony breakdown"
           >
@@ -125,20 +157,23 @@ export default function Game() {
           <span title={antTypes.filter(at => (eggInventory[at.id] ?? 0) >= 1).map(at => `${at.name}: ${Math.floor(eggInventory[at.id] ?? 0)}`).join(' · ') || 'No eggs'}>
             🥚 {Math.floor(totalEggs)}
           </span>
-          <span>🍯 {formatFood(foodAmount)}</span>
+          <button
+            onClick={() => setOpenPanel(o => o === "foodRate" ? null : "foodRate")}
+            className={`${netFoodPerSec >= 0 ? "text-white" : "text-red-300"} hover:opacity-70 transition-opacity`}
+          >🍯 {formatFood(foodAmount)} <span className={netFoodPerSec >= 0 ? "text-green-400" : "text-red-400"}>({netFoodPerSec >= 0 ? "+" : ""}{formatFood(netFoodPerSec * 3600)}/hr)</span></button>
         </div>
 
         {/* Toolbar */}
-        <div className="flex items-center gap-1 bg-black/30 backdrop-blur rounded-md overflow-hidden">
-          <button onClick={() => setZoom((z) => Math.max(0.5, z - 0.1))} className="px-2 py-1 text-white hover:bg-black/40">−</button>
-          <span className="text-xs text-white px-1">{(zoom * 100).toFixed(0)}%</span>
-          <button onClick={() => setZoom((z) => Math.min(3, z + 0.1))} className="px-2 py-1 text-white hover:bg-black/40">+</button>
+        <div className="flex items-center gap-0.5 bg-black/30 backdrop-blur rounded overflow-hidden text-[11px]">
+          <button onClick={() => setZoom((z) => Math.max(0.5, z - 0.1))} className="px-1.5 py-1 text-white hover:bg-black/40">−</button>
+          <span className="text-white px-1">{(zoom * 100).toFixed(0)}%</span>
+          <button onClick={() => setZoom((z) => Math.min(3, z + 0.1))} className="px-1.5 py-1 text-white hover:bg-black/40">+</button>
 
           {ACTIONS.map(({ action, label, activeColor }) => (
             <button
               key={action}
               onClick={() => setUIState({ selectedAction: selectedAction === action ? "none" : action })}
-              className={`px-2 py-1 text-xs transition-colors ${
+              className={`px-2 py-1 transition-colors ${
                 selectedAction === action ? `${activeColor} text-white` : "text-white hover:bg-black/40"
               }`}
             >
@@ -154,7 +189,7 @@ export default function Game() {
             }}
             className="px-2 py-1 text-white hover:bg-black/40"
           >
-            + Recruit
+            Recruit
           </button>
           <button onClick={() => saveGame(username)} className="px-2 py-1 text-white hover:bg-black/40">
             Save
@@ -162,10 +197,129 @@ export default function Game() {
         </div>
       </div>
 
+      {/* ── Population rate breakdown panel ── */}
+      {openPanel === "popRate" && (
+        <div className="absolute top-11 left-2 z-20 bg-black/70 backdrop-blur rounded-lg p-2 text-xs text-white min-w-[260px]">
+          <span className="text-neutral-400 uppercase tracking-wide text-[10px] font-semibold">Population Rate</span>
+
+          <p className="text-neutral-500 text-[10px] mt-1.5 mb-0.5">Hatching / hr</p>
+
+          {/* AQ hatch modifier */}
+          <div className={`flex justify-between items-center px-1 py-0.5 mb-0.5 rounded ${hatchMultiplier < 1 ? "bg-orange-900/30" : "bg-green-900/20"}`}>
+            <span className={hatchMultiplier < 1 ? "text-orange-300" : "text-green-400"}>
+              AQ ({quality?.label ?? "—"}) hatch rate
+            </span>
+            <span className={`font-mono font-semibold ${hatchMultiplier < 1 ? "text-orange-300" : "text-green-400"}`}>
+              ×{hatchMultiplier.toFixed(1)}
+            </span>
+          </div>
+
+          {Object.entries(chambersByType).length === 0 ? (
+            <p className="text-neutral-500 px-1">No chambers built</p>
+          ) : (
+            Object.entries(chambersByType).map(([idStr, chambers]) => {
+              const id = Number(idStr);
+              const at = antTypes.find(a => a.id === id);
+              const hasEggs = (eggInventory[id] ?? 0) > 0;
+              const typeCap = chambers * CAPACITY_PER_CHAMBER;
+              const typePop = Math.round(population.find(r => r.antType.id === id)?.population ?? 0);
+              const atCap = typePop >= typeCap;
+              const rate = hasEggs && !atCap ? Math.round(HATCH_RATE_BASE * hatchMultiplier * chambers * 3600) : 0;
+              return (
+                <div key={id} className="flex justify-between px-1">
+                  <span className="text-neutral-300">{at?.name ?? "?"} ({chambers} ch.) <span className="text-neutral-500">{typePop}/{typeCap}</span></span>
+                  <span className={`font-mono ${atCap ? "text-red-400" : rate > 0 ? "text-emerald-400" : "text-neutral-500"}`}>
+                    {atCap ? "at cap" : rate > 0 ? `+${rate}` : "no eggs"}
+                  </span>
+                </div>
+              );
+            })
+          )}
+
+          <p className="text-neutral-500 text-[10px] mt-1.5 mb-0.5">Losses / hr</p>
+          <div className="flex justify-between px-1">
+            <span className="text-neutral-300">Natural aging <span className="text-neutral-500">-1%/hr</span></span>
+            <span className="text-red-400 font-mono">-{(totalPopulation * NATURAL_DECAY_RATE_PER_SECOND * 3600).toFixed(1)}</span>
+          </div>
+          <div className="flex justify-between px-1">
+            <span className="text-neutral-300">
+              Air Quality ({quality?.label ?? "—"})
+              {aqDecayPerSec > 0 && <span className="text-neutral-500 ml-1">-{(aqDecayPerSec * 3600 * 100).toFixed(0)}%/hr</span>}
+            </span>
+            <span className={`font-mono ${aqDecayPerSec === 0 ? "text-green-400" : "text-red-400"}`}>
+              {aqDecayPerSec === 0 ? "none" : `-${(totalPopulation * aqDecayPerSec * 3600).toFixed(1)}`}
+            </span>
+          </div>
+          {isStarving && (
+            <div className="flex justify-between px-1">
+              <span className="text-red-300">Starvation <span className="text-neutral-500">-1%/hr</span></span>
+              <span className="text-red-400 font-mono">-{(totalPopulation * starvDecayPerSec * 3600).toFixed(1)}</span>
+            </div>
+          )}
+
+          <div className="flex justify-between px-1 py-1 border-t border-neutral-700 mt-1 font-semibold">
+            <span>Net</span>
+            <span className={`font-mono ${ratePerHour >= 0 ? "text-green-400" : "text-red-400"}`}>
+              {ratePerHour >= 0 ? "+" : ""}{ratePerHour.toFixed(1)}/hr
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Food rate breakdown panel ── */}
+      {openPanel === "foodRate" && (
+        <div className="absolute top-11 left-2 z-20 bg-black/70 backdrop-blur rounded-lg p-2 text-xs text-white min-w-[300px]">
+          <span className="text-neutral-400 uppercase tracking-wide text-[10px] font-semibold">Food Rate</span>
+
+          <div className="grid grid-cols-4 gap-1 text-[10px] text-neutral-500 mt-1.5 mb-0.5 px-1">
+            <span>Type</span>
+            <span className="text-right">Foraging</span>
+            <span className="text-right">Hunger</span>
+            <span className="text-right">Net</span>
+          </div>
+
+          {population.filter(r => r.population >= 0.5).map(r => {
+            const foraging = r.population * r.antType.foraging * aqForagingMult;
+            const hunger   = r.population * r.antType.hunger_cost;
+            const net      = foraging - hunger;
+            return (
+              <div key={r.antType.id} className="grid grid-cols-4 gap-1 items-center py-0.5 border-t border-neutral-800 px-1">
+                <span className="font-medium truncate">{r.antType.name}</span>
+                <span className="text-right text-emerald-400 font-mono">+{foraging.toFixed(2)}</span>
+                <span className="text-right text-red-400 font-mono">-{hunger.toFixed(2)}</span>
+                <span className={`text-right font-mono ${net >= 0 ? "text-green-400" : "text-red-400"}`}>
+                  {net >= 0 ? "+" : ""}{net.toFixed(2)}
+                </span>
+              </div>
+            );
+          })}
+
+          {/* AQ foraging modifier */}
+          <div className={`flex justify-between items-center px-1 py-0.5 mt-0.5 rounded ${aqForagingMult < 1 ? "bg-orange-900/30" : "bg-green-900/20"}`}>
+            <span className={aqForagingMult < 1 ? "text-orange-300" : "text-green-400"}>
+              AQ ({quality?.label ?? "—"}) foraging
+            </span>
+            <span className={`font-mono font-semibold ${aqForagingMult < 1 ? "text-orange-300" : "text-green-400"}`}>
+              ×{aqForagingMult.toFixed(2)}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-4 gap-1 items-center py-0.5 border-t border-neutral-600 px-1 font-semibold mt-0.5">
+            <span>Total</span>
+            <span className="text-right text-emerald-400 font-mono">+{totalForaging.toFixed(2)}</span>
+            <span className="text-right text-red-400 font-mono">-{totalHunger.toFixed(2)}</span>
+            <span className={`text-right font-mono ${netFoodPerSec >= 0 ? "text-green-400" : "text-red-400"}`}>
+              {netFoodPerSec >= 0 ? "+" : ""}{netFoodPerSec.toFixed(2)}
+            </span>
+          </div>
+          <p className="text-[10px] text-neutral-600 mt-1">food / second</p>
+        </div>
+      )}
+
       {/* ── Colony breakdown panel ── */}
-      {colonyOpen && (
-        <div className="absolute top-14 left-4 z-20 bg-black/70 backdrop-blur rounded-lg p-3 text-xs text-white min-w-[320px]">
-          <div className="flex items-center justify-between mb-2">
+      {openPanel === "colony" && (
+        <div className="absolute top-11 left-2 z-20 bg-black/70 backdrop-blur rounded-lg p-2 text-xs text-white min-w-[320px]">
+          <div className="flex items-center justify-between mb-1">
             <span className="text-neutral-400 uppercase tracking-wide text-[10px] font-semibold">Colony Breakdown</span>
             <span className="text-neutral-500 text-[10px]">🏠 {totalPopulation}/{housingCapacity} total housing</span>
           </div>
@@ -189,7 +343,7 @@ export default function Game() {
             const cap   = chs * CAPACITY_PER_CHAMBER;
             const popColor = cap === 0 ? "text-neutral-400" : pop >= cap ? "text-red-400" : pop >= cap * 0.8 ? "text-yellow-400" : "text-green-400";
             return (
-              <div key={at.id} className="grid grid-cols-5 gap-1 items-center py-1 border-t border-neutral-800 px-1">
+              <div key={at.id} className="grid grid-cols-5 gap-1 items-center py-0.5 border-t border-neutral-800 px-1">
                 <span className="font-medium truncate">{at.name}</span>
                 <span className={`text-center font-mono ${popColor}`}>{pop}</span>
                 <span className="text-center text-neutral-300">{chs} <span className="text-neutral-500">({cap} cap)</span></span>
@@ -201,7 +355,7 @@ export default function Game() {
             );
           })}
 
-          <p className="text-[10px] text-neutral-600 mt-2 border-t border-neutral-800 pt-2">
+          <p className="text-[10px] text-neutral-600 mt-1 border-t border-neutral-800 pt-1">
             Each chamber hatches ~10 eggs/hr at good air quality · holds {CAPACITY_PER_CHAMBER} ants
           </p>
         </div>
@@ -209,7 +363,7 @@ export default function Game() {
 
       {/* ── Egg inventory panel (shown when Nest tool is active) ── */}
       {selectedAction === "nest" && (
-        <div className="absolute top-16 left-4 z-20 bg-black/60 backdrop-blur rounded-lg px-3 py-2 text-xs text-white flex flex-col gap-1">
+        <div className="absolute top-11 left-2 z-20 bg-black/60 backdrop-blur rounded-lg px-2 py-1.5 text-xs text-white flex flex-col gap-0.5">
           <span className="text-neutral-400 uppercase tracking-wide text-[10px]">Available Eggs</span>
           {typesWithEggs.length === 0 ? (
             <span className="text-red-400">No eggs — recruit first</span>
@@ -396,6 +550,7 @@ export default function Game() {
       )}
 
       {dashboardOpen && <Dashboard setDashboard={setDashboard} />}
+      {devModeOpen && <DevMode onClose={() => setDevMode(false)} />}
 
       <GameCanvas
         zoom={zoom}

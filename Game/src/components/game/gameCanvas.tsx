@@ -110,6 +110,21 @@ function steerToward(ant: VAnt, dx: number, dy: number, maxSpd: number, dt: numb
   }
 }
 
+type AQPalette = {
+  skyTop: string; skyBot: string;
+  grassBase: string; grassBright: string;
+  grassBlade1: string; grassBlade2: string;
+  smog: string | null;
+};
+
+function aqPalette(pm: number): AQPalette {
+  if (pm <= 20)    return { skyTop: "#3a82c4", skyBot: "#9fd8f0", grassBase: "#3a6b1e", grassBright: "#4d8c28", grassBlade1: "#5aa830", grassBlade2: "#3d7a1c", smog: null };
+  if (pm <= 35.4)  return { skyTop: "#6a8a50", skyBot: "#b8cc80", grassBase: "#3a5e18", grassBright: "#4a7820", grassBlade1: "#5a9428", grassBlade2: "#3a6a18", smog: "rgba(160,150,60,0.07)" };
+  if (pm <= 55.4)  return { skyTop: "#8a7a40", skyBot: "#c8b870", grassBase: "#4a5a14", grassBright: "#5a7018", grassBlade1: "#6a8020", grassBlade2: "#4a6010", smog: "rgba(180,140,40,0.13)" };
+  if (pm <= 150.4) return { skyTop: "#7a5a28", skyBot: "#b89050", grassBase: "#504a10", grassBright: "#605814", grassBlade1: "#706018", grassBlade2: "#504810", smog: "rgba(160,100,20,0.20)" };
+  return                  { skyTop: "#3a2a1a", skyBot: "#6a4a2a", grassBase: "#3a3010", grassBright: "#4a3c0c", grassBlade1: "#4a3c0c", grassBlade2: "#3a2c08", smog: "rgba(100,60,10,0.32)" };
+}
+
 function roleFromType(at: AntType | null): { role: AntRole; bodyColor: string; headColor: string; legColor: string; bodyW: number; bodyH: number; surfaceChance: number; chaseRadius: number; tunnelSpdMult: number } {
   if (!at) return { role: "generic", bodyColor: "#c87941", headColor: "#6a2a08", legColor: "#5a2808", bodyW: 6,   bodyH: 3,   surfaceChance: 0.08, chaseRadius:  80, tunnelSpdMult: 1.0  };
   const n = at.name.toLowerCase();
@@ -385,8 +400,9 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
     // ── Draw ────────────────────────────────────────────────────────────────
     const draw = () => {
       const map = useGameStore.getState().map as TileMap;
+      const pal = aqPalette(useGameStore.getState().airQuality);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "#87CEEB";
+      ctx.fillStyle = pal.skyTop;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       ctx.save();
@@ -395,8 +411,8 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
 
       // Sky gradient
       const skyGrad = ctx.createLinearGradient(0, 0, 0, SURFACE_H);
-      skyGrad.addColorStop(0, "#3a82c4");
-      skyGrad.addColorStop(1, "#9fd8f0");
+      skyGrad.addColorStop(0, pal.skyTop);
+      skyGrad.addColorStop(1, pal.skyBot);
       ctx.fillStyle = skyGrad;
       ctx.fillRect(camera.current.x, camera.current.y, canvas.width / safeZoom, SURFACE_H);
 
@@ -405,9 +421,9 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
       ctx.fillRect(0, SURFACE_H, WORLD_W, WORLD_H - SURFACE_H);
 
       // Grass base layers
-      ctx.fillStyle = "#3a6b1e";
+      ctx.fillStyle = pal.grassBase;
       ctx.fillRect(0, SURFACE_H - 10, WORLD_W, 14);
-      ctx.fillStyle = "#4d8c28";
+      ctx.fillStyle = pal.grassBright;
       ctx.fillRect(0, SURFACE_H - 14, WORLD_W, 6);
 
       // Grass blades (only in visible range for performance)
@@ -416,7 +432,7 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
       for (let gx = Math.floor(camLeft / 3) * 3; gx < camRight; gx += 3) {
         const h = 5 + Math.sin(gx * 0.18) * 2 + Math.sin(gx * 0.41) * 1.5;
         const lean = Math.sin(gx * 0.09) * 2.5;
-        ctx.strokeStyle = gx % 6 < 3 ? "#5aa830" : "#3d7a1c";
+        ctx.strokeStyle = gx % 6 < 3 ? pal.grassBlade1 : pal.grassBlade2;
         ctx.beginPath(); ctx.moveTo(gx, SURFACE_H - 14); ctx.lineTo(gx + lean, SURFACE_H - 14 - h); ctx.stroke();
       }
 
@@ -557,6 +573,13 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
       ctx.strokeStyle = "yellow";
       ctx.lineWidth = 10 / safeZoom;
       ctx.strokeRect(0, 0, WORLD_W, WORLD_H);
+
+      // Smog overlay — tints the whole scene at bad AQ
+      if (pal.smog) {
+        ctx.fillStyle = pal.smog;
+        ctx.fillRect(camera.current.x, camera.current.y, canvas.width / safeZoom, canvas.height / safeZoom);
+      }
+
       ctx.restore();
 
       // Vignette

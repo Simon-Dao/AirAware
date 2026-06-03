@@ -3,9 +3,10 @@ import axios from "axios";
 import { create } from "zustand";
 import {
   SERVER_BASE_URL, TILE_COMPLETION_MS,
-  DECAY_RATE_PER_SECOND, SEVERE_DECAY_RATE_PER_SECOND,
+  NATURAL_DECAY_RATE_PER_SECOND, DECAY_RATE_PER_SECOND, SEVERE_DECAY_RATE_PER_SECOND,
   STARVATION_RATE_PER_SECOND, MIN_TOTAL_POPULATION, MAX_CATCHUP_SECONDS,
   HATCH_RATE_BASE, CAPACITY_PER_CHAMBER, DIG_FOOD_COST, FILL_FOOD_COST, NEST_FOOD_COST, EGG_FOOD_COST,
+  aqForagingMultiplier,
 } from "./constants";
 
 // Fills -1 gaps in hourly AQ history via linear interpolation.
@@ -157,6 +158,9 @@ export const useGameStore = create<GameState>((set, get) => ({
     const lastUpdateMs = colony.last_update > 1e12 ? colony.last_update : colony.last_update * 1000;
     const elapsedSeconds = Math.min((Date.now() - lastUpdateMs) / 1000, MAX_CATCHUP_SECONDS);
     if (elapsedSeconds > 0) get().tick(elapsedSeconds);
+
+    // Override the stale colony.air_quality with fresh sensor data immediately.
+    await get().pollAirQuality(username);
   },
 
   saveGame: async (username: string) => {
@@ -334,22 +338,31 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   pollAirQuality: async (username: string) => {
+    const RECENT_N = 10;
     const now = new Date();
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    // Try last hour first, then fall back to last 30 days so old-timestamped
+    // seed/dev readings still take effect.
+    const windows = [60 * 60 * 1000, 30 * 24 * 60 * 60 * 1000];
 
-    const res = await axios.get(SERVER_BASE_URL + "user/get/readings", {
-      params: {
-        username,
-        begin_time: oneHourAgo.toISOString().replace(/\.\d{3}Z$/, "Z"),
-        end_time: now.toISOString().replace(/\.\d{3}Z$/, "Z"),
-      },
-    });
-
-    const readings = res.data.readings as { pm: number }[];
-    if (readings.length === 0) return;
-
-    const avg = readings.reduce((sum, r) => sum + r.pm, 0) / readings.length;
-    set({ airQuality: avg });
+    for (const windowMs of windows) {
+      const begin = new Date(now.getTime() - windowMs);
+      const res = await axios.get(SERVER_BASE_URL + "user/get/readings", {
+        params: {
+          username,
+          begin_time: begin.toISOString().replace(/\.\d{3}Z$/, "Z"),
+          end_time:   now.toISOString().replace(/\.\d{3}Z$/, "Z"),
+        },
+      });
+      const readings = res.data.readings as { pm: number; timestamp: string }[];
+      if (readings.length > 0) {
+        const recent = [...readings]
+          .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+          .slice(0, RECENT_N);
+        const avg = recent.reduce((sum, r) => sum + r.pm, 0) / recent.length;
+        set({ airQuality: avg });
+        return;
+      }
+    }
   },
 
   tick: (deltaSeconds: number) => {
@@ -363,9 +376,9 @@ export const useGameStore = create<GameState>((set, get) => ({
     const isStarving = newFood === 0;
 
     const pm = state.airQuality;
-    let rate = pm <= 20    ? 0
-             : pm <= 150.4 ? -DECAY_RATE_PER_SECOND
-                           : -SEVERE_DECAY_RATE_PER_SECOND;
+    let rate = -NATURAL_DECAY_RATE_PER_SECOND;
+    if (pm > 20 && pm <= 150.4) rate -= DECAY_RATE_PER_SECOND;
+    else if (pm > 150.4)        rate -= SEVERE_DECAY_RATE_PER_SECOND;
     if (isStarving) rate -= STARVATION_RATE_PER_SECOND;
 
     const factor = 1 + rate * deltaSeconds;
@@ -398,25 +411,21 @@ export const useGameStore = create<GameState>((set, get) => ({
       }
     }
 
-    // Hatching is gated by housing capacity: each chamber supports CAPACITY_PER_CHAMBER ants.
-    // If the colony is at or above capacity, eggs can't hatch.
-    const housingCapacity = totalChambers * CAPACITY_PER_CHAMBER;
-    const currentTotal = newPop.reduce((s, r) => s + r.population, 0);
-    const availableCapacity = Math.max(0, housingCapacity - currentTotal);
-
+    // Hatching is gated per-type: each type can only hatch up to its own chambers' capacity.
     const newEggs = { ...state.eggInventory };
     const eggHatches: Record<number, number> = {};
 
-    if (availableCapacity > 0) {
-      for (const [antTypeIdStr, chamberCount] of Object.entries(chambersByType)) {
-        const antTypeId = Number(antTypeIdStr);
-        const available = newEggs[antTypeId] ?? 0;
-        if (available <= 0) continue;
-        // Cap total hatches this tick to remaining capacity
-        const maxHatch = Math.min(available, availableCapacity, HATCH_RATE_BASE * hatchMultiplier * chamberCount * deltaSeconds);
-        newEggs[antTypeId] = available - maxHatch;
-        eggHatches[antTypeId] = maxHatch;
-      }
+    for (const [antTypeIdStr, chamberCount] of Object.entries(chambersByType)) {
+      const antTypeId = Number(antTypeIdStr);
+      const available = newEggs[antTypeId] ?? 0;
+      if (available <= 0) continue;
+      const typeCapacity = chamberCount * CAPACITY_PER_CHAMBER;
+      const typePop = newPop.find(r => r.antType.id === antTypeId)?.population ?? 0;
+      const typeAvailable = Math.max(0, typeCapacity - typePop);
+      if (typeAvailable <= 0) continue;
+      const maxHatch = Math.min(available, typeAvailable, HATCH_RATE_BASE * hatchMultiplier * chamberCount * deltaSeconds);
+      newEggs[antTypeId] = available - maxHatch;
+      eggHatches[antTypeId] = maxHatch;
     }
 
     // Add hatched ants to population, creating a record if the type isn't there yet
@@ -468,7 +477,11 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   getAttackRate: () => get().population.reduce((s, r) => s + r.population * r.antType.attack, 0),
   getMiningRate: () => get().population.reduce((s, r) => s + r.population * r.antType.mining, 0),
-  getForagingRate: () => get().population.reduce((s, r) => s + r.population * r.antType.foraging, 0),
+  getForagingRate: () => {
+    const { population, airQuality } = get();
+    const mult = aqForagingMultiplier(airQuality);
+    return population.reduce((s, r) => s + r.population * r.antType.foraging, 0) * mult;
+  },
   getHungerRate: () => get().population.reduce((s, r) => s + r.population * r.antType.hunger_cost, 0),
   getTotalPopulation: () => get().population.reduce((s, r) => s + r.population, 0),
   getHousingCapacity: () => {
@@ -486,7 +499,9 @@ export const useGameStore = create<GameState>((set, get) => ({
     const pm = airQuality;
 
     // Decay contribution
-    let decayRate = pm <= 20 ? 0 : pm <= 150.4 ? DECAY_RATE_PER_SECOND : SEVERE_DECAY_RATE_PER_SECOND;
+    let decayRate = NATURAL_DECAY_RATE_PER_SECOND;
+    if (pm > 20 && pm <= 150.4) decayRate += DECAY_RATE_PER_SECOND;
+    else if (pm > 150.4)        decayRate += SEVERE_DECAY_RATE_PER_SECOND;
     const foragingRate = get().getForagingRate();
     const hungerRate = get().getHungerRate();
     if (foodAmount === 0 && hungerRate > foragingRate) decayRate += STARVATION_RATE_PER_SECOND;
@@ -511,15 +526,14 @@ export const useGameStore = create<GameState>((set, get) => ({
       }
     }
 
-    const housingCapacity = totalChambers * CAPACITY_PER_CHAMBER;
-    const availableCapacity = Math.max(0, housingCapacity - totalPop);
     let hatchPerHour = 0;
-    if (availableCapacity > 0) {
-      for (const [antTypeIdStr, chamberCount] of Object.entries(chambersByType)) {
-        const antTypeId = Number(antTypeIdStr);
-        if ((eggInventory[antTypeId] ?? 0) > 0) {
-          hatchPerHour += HATCH_RATE_BASE * hatchMultiplier * chamberCount * 3600;
-        }
+    for (const [antTypeIdStr, chamberCount] of Object.entries(chambersByType)) {
+      const antTypeId = Number(antTypeIdStr);
+      if ((eggInventory[antTypeId] ?? 0) <= 0) continue;
+      const typeCapacity = chamberCount * CAPACITY_PER_CHAMBER;
+      const typePop = population.find(r => r.antType.id === antTypeId)?.population ?? 0;
+      if (typePop < typeCapacity) {
+        hatchPerHour += HATCH_RATE_BASE * hatchMultiplier * chamberCount * 3600;
       }
     }
 

@@ -131,6 +131,15 @@ class Database:
         )
         return True, "Unlocked"
 
+    def delete_reading(self, reading_id):
+        self._execute("DELETE FROM sensor_reading WHERE id = ?", (reading_id,))
+
+    def update_reading(self, reading_id, pm, timestamp, longitude, latitude):
+        self._execute(
+            "UPDATE sensor_reading SET pm=?, timestamp=?, longitude=?, latitude=? WHERE id=?",
+            (pm, timestamp, longitude, latitude, reading_id)
+        )
+
     def insert_user_reading(self, username, pm, timestamp, longitude, latitude):
         self._execute(
             "INSERT OR IGNORE INTO sensor_reading (username, pm, timestamp, longitude, latitude) VALUES (?, ?, ?, ?, ?)",

@@ -130,6 +130,64 @@ def pm_store():
     database.insert_user_reading(username, pm, timestamp, longitude, latitude)
     return jsonify({"message": str(username) + " added:" + " " + str(pm) + " " + str(timestamp) + " " + str(latitude) + " " + str(longitude)})
 
+@app.route('/user/delete/reading/<int:reading_id>', methods=['DELETE'])
+def delete_reading(reading_id):
+    """
+    Delete a sensor reading by ID
+    ---
+    tags:
+      - User
+    parameters:
+      - in: path
+        name: reading_id
+        type: integer
+        required: true
+    responses:
+      200:
+        description: Reading deleted
+    """
+    database.delete_reading(reading_id)
+    return jsonify({"success": True})
+
+@app.route('/user/update/reading/<int:reading_id>', methods=['PUT'])
+def update_reading(reading_id):
+    """
+    Update a sensor reading by ID
+    ---
+    tags:
+      - User
+    parameters:
+      - in: path
+        name: reading_id
+        type: integer
+        required: true
+      - in: body
+        name: body
+        schema:
+          type: object
+          properties:
+            pm:
+              type: number
+            timestamp:
+              type: string
+            longitude:
+              type: number
+            latitude:
+              type: number
+    responses:
+      200:
+        description: Reading updated
+    """
+    data = request.get_json()
+    database.update_reading(
+        reading_id,
+        data.get('pm'),
+        data.get('timestamp'),
+        data.get('longitude', 0),
+        data.get('latitude', 0),
+    )
+    return jsonify({"success": True})
+
 @app.route('/user/init', methods=['POST'])
 def init_user():
     """
