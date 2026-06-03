@@ -17,13 +17,12 @@ const STEER        = 260;       // steering acceleration px/sec²
 const ARRIVE_R2    = 12 * 12;   // squared arrival radius for tile center
 
 // ── Bug constants ────────────────────────────────────────────────────────────
-const MAX_BUGS      = 4;
-const BUG_SPD       = 28;
+const MAX_BUGS      = 10;
+const BUG_SPD       = 32;
 const BUG_HP        = 2.5;
-const BUG_W = 7, BUG_H = 5;
-const ANT_W = 5, ANT_H = 3;
+const BUG_W = 11, BUG_H = 7;
 
-const ANT_COLORS = ["#2a1a10", "#1a0d05", "#3c2112", "#201008"];
+const ANT_COLORS = ["#c87941", "#b56a30", "#d4893a", "#a05828"];
 
 // ── Types ────────────────────────────────────────────────────────────────────
 type TileMap = Record<number, Record<number, { type: string; completion: number | null }>>;
@@ -39,6 +38,9 @@ type VAnt = {
   carrying: boolean;
   color: string;
   fightTimer: number;
+  phase: number;       // per-ant time accumulator for sinusoidal movement
+  spdScale: number;    // individual speed variation (0.8–1.2)
+  prevRow: number; prevCol: number; // last tile, to avoid immediate backtracking
 };
 
 type VBug = {
@@ -47,6 +49,7 @@ type VBug = {
   hp: number;
   dirTimer: number;
   deadTimer: number;
+  hitTimer: number;
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -112,6 +115,9 @@ function makeAnt(map: TileMap): VAnt | null {
     carrying: false,
     color: ANT_COLORS[Math.floor(Math.random() * ANT_COLORS.length)],
     fightTimer: 0,
+    phase: Math.random() * Math.PI * 2,
+    spdScale: 0.8 + Math.random() * 0.4,
+    prevRow: -1, prevCol: -1,
   };
 }
 
@@ -119,7 +125,7 @@ function makeBug(): VBug {
   return {
     x: Math.random() * WORLD_W, y: WALK_Y,
     vx: (Math.random() - 0.5) * BUG_SPD * 2,
-    hp: BUG_HP, dirTimer: 2 + Math.random() * 3, deadTimer: 0,
+    hp: BUG_HP, dirTimer: 2 + Math.random() * 3, deadTimer: 0, hitTimer: 0,
   };
 }
 
@@ -184,33 +190,41 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
 
       for (const ant of ants) {
         ant.fightTimer = Math.max(0, ant.fightTimer - dt);
+        ant.phase += dt;
 
         // ── Tunnel mode ──
         if (ant.state === "tunnel") {
-          const tx = ant.tCol * GS + GS / 2;
-          const ty = ant.tRow * GS + SURFACE_H + GS / 2;
-          const dx = tx - ant.x, dy = ty - ant.y;
-          const dist2 = dx * dx + dy * dy;
+          // Detect tile crossing by grid position — no distance snap possible
+          const curRow = Math.floor((ant.y - SURFACE_H) / GS);
+          const curCol = Math.floor(ant.x / GS);
 
-          if (dist2 < ARRIVE_R2) {
-            // Arrived — choose next tile
+          if (curRow === ant.tRow && curCol === ant.tCol) {
+            ant.prevRow = ant.row; ant.prevCol = ant.col;
             ant.row = ant.tRow; ant.col = ant.tCol;
-            ant.x = tx; ant.y = ty;
 
             const adj = adjOpen(map, ant.row, ant.col);
-            if (ant.row === 0 && Math.random() < 0.014) {
-              // Go to surface
+            if (ant.row === 0 && Math.random() < 0.08) {
               ant.state = "surface";
               ant.surfaceTimer = 9 + Math.random() * 12;
               ant.wanderAngle  = (ant.vx >= 0 ? 0 : Math.PI) + (Math.random() - 0.5) * 0.4;
               ant.carrying = false;
             } else if (adj.length > 0) {
-              const [nr, nc] = adj[Math.floor(Math.random() * adj.length)];
+              const forward = adj.filter(([r, c]) => r !== ant.prevRow || c !== ant.prevCol);
+              const candidates = forward.length > 0 ? forward : adj;
+              const [nr, nc] = candidates[Math.floor(Math.random() * candidates.length)];
               ant.tRow = nr; ant.tCol = nc;
             }
-          } else {
-            steerToward(ant, dx, dy, SPD_TUNNEL, dt, dist2, ARRIVE_R2 * 9);
-            clampSpd(ant, SPD_TUNNEL);
+          }
+
+          // Movement always runs, continuously steers toward target tile center
+          if (ant.state === "tunnel") {
+            const stx = ant.tCol * GS + GS / 2;
+            const sty = ant.tRow * GS + SURFACE_H + GS / 2;
+            const sdx = stx - ant.x, sdy = sty - ant.y;
+            const sdist2 = sdx * sdx + sdy * sdy;
+            const spd = SPD_TUNNEL * ant.spdScale;
+            steerToward(ant, sdx, sdy, spd, dt, sdist2, 1);
+            clampSpd(ant, spd);
             ant.x += ant.vx * dt;
             ant.y += ant.vy * dt;
           }
@@ -224,48 +238,56 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
 
         // ── Surface mode ──
         } else if (ant.state === "surface") {
-          // Rise smoothly to walk level
-          const toSurf = WALK_Y - ant.y;
+          // Vertical bob: sine wave offset around walk level
+          const bobY = WALK_Y + Math.sin(ant.phase * 6.5) * 1.8;
+          const toSurf = bobY - ant.y;
           if (Math.abs(toSurf) > 1) {
             ant.vy += toSurf * 14 * dt;
           } else {
-            ant.y = WALK_Y;
+            ant.y = bobY;
             ant.vy *= 0.85;
           }
 
-          // Wander angle drifts slowly — gives organic lateral movement
-          ant.wanderAngle += (Math.random() - 0.5) * 3.5 * dt;
-          // Bias toward horizontal (clamp away from straight up/down)
+          // Chase nearest bug within 80px, otherwise wander
+          let chaseBug: VBug | null = null;
+          let chaseDist2 = 80 * 80;
+          for (const bug of bugs) {
+            if (bug.deadTimer > 0) continue;
+            const bx = bug.x - ant.x, by = bug.y - ant.y;
+            const d2 = bx * bx + by * by;
+            if (d2 < chaseDist2) { chaseDist2 = d2; chaseBug = bug; }
+          }
+
+          if (chaseBug) {
+            // Steer toward bug
+            const targetAngle = Math.atan2(chaseBug.y - ant.y, chaseBug.x - ant.x);
+            ant.wanderAngle += (targetAngle - ant.wanderAngle) * Math.min(1, 6 * dt);
+            if (chaseDist2 < 14 * 14) {
+              chaseBug.hp -= dt * 2;
+              chaseBug.hitTimer = 0.12;
+              ant.fightTimer = 0.25;
+              if (chaseBug.hp <= 0) chaseBug.deadTimer = 8;
+            }
+          } else {
+            ant.wanderAngle += (Math.random() - 0.5) * 3.0 * dt;
+          }
+
+          // Clamp away from straight up/down, reverse at edges
           ant.wanderAngle = Math.max(-Math.PI * 0.85, Math.min(Math.PI * 0.85, ant.wanderAngle));
-
-          const desiredVx = Math.cos(ant.wanderAngle) * SPD_SURFACE;
-          const dvx = desiredVx - ant.vx;
-          ant.vx += Math.sign(dvx) * Math.min(Math.abs(dvx), STEER * dt);
-
-          // Reverse wander at world edges
           if (ant.x < 30 || ant.x > WORLD_W - 30) {
             ant.wanderAngle = Math.PI - ant.wanderAngle;
             ant.x = Math.max(30, Math.min(WORLD_W - 30, ant.x));
           }
 
+          const desiredVx = Math.cos(ant.wanderAngle) * SPD_SURFACE * ant.spdScale;
+          const dvx = desiredVx - ant.vx;
+          ant.vx += Math.sign(dvx) * Math.min(Math.abs(dvx), STEER * dt);
+
           ant.x += ant.vx * dt;
           ant.y += ant.vy * dt;
           ant.surfaceTimer -= dt;
           if (ant.surfaceTimer <= 0) { ant.state = "returning"; ant.carrying = false; }
-
-          // Mark carrying after a short surface delay
           if (ant.surfaceTimer < 7) ant.carrying = true;
-
-          // Fight nearby bugs
-          for (const bug of bugs) {
-            if (bug.deadTimer > 0) continue;
-            const bx = bug.x - ant.x, by = bug.y - ant.y;
-            if (bx * bx + by * by < 28 * 28) {
-              bug.hp -= dt;
-              ant.fightTimer = 0.3;
-              if (bug.hp <= 0) bug.deadTimer = 10;
-            }
-          }
 
         // ── Returning mode ──
         } else {
@@ -285,11 +307,11 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
           ant.y += ant.vy * dt;
           ant.carrying = false;
 
-          // Enter tunnel when close to entrance
+          // Enter tunnel when close to entrance — no position snap
           if (dist2 < 16 * 16 && isOpen(map, er, ec)) {
             ant.state = "tunnel";
             ant.row = er; ant.col = ec;
-            ant.x = tx; ant.y = er * GS + SURFACE_H + GS / 2;
+            ant.tRow = er; ant.tCol = ec;
             const adj = adjOpen(map, er, ec);
             if (adj.length > 0) { [ant.tRow, ant.tCol] = adj[Math.floor(Math.random() * adj.length)]; }
           }
@@ -303,11 +325,13 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
       while (bugs.length < MAX_BUGS) bugs.push(makeBug());
 
       for (const bug of bugs) {
+        if (bug.hitTimer > 0) bug.hitTimer -= dt;
         if (bug.deadTimer > 0) {
           bug.deadTimer -= dt;
           if (bug.deadTimer <= 0) {
             bug.x = Math.random() * WORLD_W; bug.y = WALK_Y;
-            bug.hp = BUG_HP; bug.vx = (Math.random() - 0.5) * BUG_SPD * 2;
+            bug.hp = BUG_HP; bug.hitTimer = 0;
+            bug.vx = (Math.random() - 0.5) * BUG_SPD * 2;
             bug.dirTimer = 2 + Math.random() * 3;
           }
           continue;
@@ -332,11 +356,32 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
       ctx.scale(safeZoom, safeZoom);
       ctx.translate(-camera.current.x, -camera.current.y);
 
-      // Grass + dirt
-      ctx.fillStyle = "green";
-      ctx.fillRect(0, SURFACE_H - 5, WORLD_W, 10);
+      // Sky gradient
+      const skyGrad = ctx.createLinearGradient(0, 0, 0, SURFACE_H);
+      skyGrad.addColorStop(0, "#3a82c4");
+      skyGrad.addColorStop(1, "#9fd8f0");
+      ctx.fillStyle = skyGrad;
+      ctx.fillRect(camera.current.x, camera.current.y, canvas.width / safeZoom, SURFACE_H);
+
+      // Dirt
       ctx.fillStyle = "#8B5A2B";
       ctx.fillRect(0, SURFACE_H, WORLD_W, WORLD_H - SURFACE_H);
+
+      // Grass base layers
+      ctx.fillStyle = "#3a6b1e";
+      ctx.fillRect(0, SURFACE_H - 10, WORLD_W, 14);
+      ctx.fillStyle = "#4d8c28";
+      ctx.fillRect(0, SURFACE_H - 14, WORLD_W, 6);
+
+      // Grass blades (only in visible range for performance)
+      const camLeft = camera.current.x, camRight = camLeft + canvas.width / safeZoom;
+      ctx.lineWidth = 1;
+      for (let gx = Math.floor(camLeft / 3) * 3; gx < camRight; gx += 3) {
+        const h = 5 + Math.sin(gx * 0.18) * 2 + Math.sin(gx * 0.41) * 1.5;
+        const lean = Math.sin(gx * 0.09) * 2.5;
+        ctx.strokeStyle = gx % 6 < 3 ? "#5aa830" : "#3d7a1c";
+        ctx.beginPath(); ctx.moveTo(gx, SURFACE_H - 14); ctx.lineTo(gx + lean, SURFACE_H - 14 - h); ctx.stroke();
+      }
 
       // Tiles
       const now = Date.now();
@@ -374,20 +419,75 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
 
       // Bugs
       for (const bug of bugsRef.current) {
+        if (bug.deadTimer > 5) {
+          // Dead bug — squished briefly
+          ctx.fillStyle = "#2a1200";
+          ctx.fillRect(bug.x - BUG_W * 0.6, bug.y + 1, BUG_W * 1.2, 2);
+          continue;
+        }
         if (bug.deadTimer > 0) continue;
-        ctx.fillStyle = "#6b1010";
+        const bugCol = bug.hitTimer > 0 ? "#ffffff" : (bug.hp < BUG_HP * 0.4 ? "#ffaa00" : "#22bb22");
+        // Body
+        ctx.fillStyle = bugCol;
         ctx.fillRect(bug.x - BUG_W / 2, bug.y - BUG_H / 2, BUG_W, BUG_H);
-        ctx.fillStyle = "#ff3333";
-        ctx.fillRect(bug.x - BUG_W / 2, bug.y - BUG_H / 2 - 4, BUG_W * (bug.hp / BUG_HP), 2);
+        // Stripe
+        ctx.fillStyle = "rgba(0,0,0,0.3)";
+        ctx.fillRect(bug.x - BUG_W / 2 + 3, bug.y - BUG_H / 2, BUG_W - 6, BUG_H);
+        // Head
+        const bFacing = bug.vx >= 0 ? 1 : -1;
+        ctx.fillStyle = "#115511";
+        ctx.fillRect(bug.x + bFacing * (BUG_W / 2 - 2), bug.y - 2, 3, 4);
+        // Legs
+        ctx.strokeStyle = "#116611";
+        ctx.lineWidth = 0.8;
+        for (let i = 0; i < 3; i++) {
+          const lx = bug.x + (i - 1) * 3.5;
+          ctx.beginPath(); ctx.moveTo(lx, bug.y + 2); ctx.lineTo(lx - 2, bug.y + 5); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(lx, bug.y + 2); ctx.lineTo(lx + 2, bug.y + 5); ctx.stroke();
+        }
+        // HP bar only when hurt
+        if (bug.hp < BUG_HP) {
+          ctx.fillStyle = "#cc0000";
+          ctx.fillRect(bug.x - BUG_W / 2, bug.y - BUG_H / 2 - 4, BUG_W * (bug.hp / BUG_HP), 2);
+          ctx.strokeStyle = "#440000";
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(bug.x - BUG_W / 2, bug.y - BUG_H / 2 - 4, BUG_W, 2);
+        }
       }
 
       // Ants
       for (const ant of antsRef.current) {
-        ctx.fillStyle = ant.fightTimer > 0 ? "#cc2200" : ant.color;
-        ctx.fillRect(ant.x - ANT_W / 2, ant.y - ANT_H / 2, ANT_W, ANT_H);
+        const fighting = ant.fightTimer > 0;
+        const col = fighting ? "#ff4400" : ant.color;
+        const facingRight = ant.vx >= 0;
+        const headX = ant.x + (facingRight ? 3 : -3);
+        const legPhase = ant.phase * 7;
+
+        // Legs behind body
+        ctx.strokeStyle = fighting ? "#cc2200" : "#5a2808";
+        ctx.lineWidth = 0.8;
+        for (let i = 0; i < 3; i++) {
+          const lx = ant.x + (i - 1) * 2.2;
+          const swing = Math.sin(legPhase + i * 2.1) * 2.5;
+          ctx.beginPath(); ctx.moveTo(lx, ant.y + 1); ctx.lineTo(lx - 1.5, ant.y + 1 + swing); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(lx, ant.y + 1); ctx.lineTo(lx + 1.5, ant.y + 1 - swing); ctx.stroke();
+        }
+
+        // Dark outline for visibility on any background
+        ctx.fillStyle = "#1a0800";
+        ctx.fillRect(ant.x - 3.5, ant.y - 2, 7, 4);
+        ctx.fillRect(headX - 2, ant.y - 2.5, 4, 4);
+
+        // Body
+        ctx.fillStyle = col;
+        ctx.fillRect(ant.x - 3, ant.y - 1.5, 6, 3);
+        // Head
+        ctx.fillStyle = fighting ? "#ff4400" : "#6a2a08";
+        ctx.fillRect(headX - 1.5, ant.y - 2, 3, 3);
+
         if (ant.carrying) {
-          ctx.fillStyle = "#d4a835";
-          ctx.fillRect(ant.x - 1.5, ant.y - ANT_H / 2 - 3, 3, 3);
+          ctx.fillStyle = "#f0c040";
+          ctx.fillRect(ant.x - 2, ant.y - 5, 4, 3);
         }
       }
 
