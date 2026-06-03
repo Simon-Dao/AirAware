@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useGameStore } from "../../state/gameState";
+import type { AntType } from "../../state/gameState";
 import { useUIStore } from "../../state/uiState";
 import { TILE_COMPLETION_MS } from "../../state/constants";
 
@@ -22,25 +23,35 @@ const BUG_SPD       = 32;
 const BUG_HP        = 2.5;
 const BUG_W = 11, BUG_H = 7;
 
-const ANT_COLORS = ["#c87941", "#b56a30", "#d4893a", "#a05828"];
-
 // ── Types ────────────────────────────────────────────────────────────────────
-type TileMap = Record<number, Record<number, { type: string; completion: number | null }>>;
+type TileMap = Record<number, Record<number, { type: string; completion: number | null; antTypeId?: number }>>;
+type PopRec  = { antType: AntType; population: number };
+
+type AntRole = "soldier" | "forager" | "worker" | "generic";
 
 type VAnt = {
   x: number; y: number;
   vx: number; vy: number;
-  row: number; col: number;     // current tile
-  tRow: number; tCol: number;   // target tile (tunnel)
+  row: number; col: number;
+  tRow: number; tCol: number;
   state: "tunnel" | "surface" | "returning";
   surfaceTimer: number;
-  wanderAngle: number;          // smoothly-drifting heading on surface
+  wanderAngle: number;
   carrying: boolean;
-  color: string;
   fightTimer: number;
-  phase: number;       // per-ant time accumulator for sinusoidal movement
-  spdScale: number;    // individual speed variation (0.8–1.2)
-  prevRow: number; prevCol: number; // last tile, to avoid immediate backtracking
+  phase: number;
+  spdScale: number;
+  prevRow: number; prevCol: number;
+  // Per-type visuals & behaviour
+  role: AntRole;
+  bodyColor: string;
+  headColor: string;
+  legColor: string;
+  bodyW: number;
+  bodyH: number;
+  surfaceChance: number;  // probability to surface when at row 0
+  chaseRadius: number;    // px radius to start chasing bugs
+  tunnelSpdMult: number;  // multiplier on SPD_TUNNEL
 };
 
 type VBug = {
@@ -99,12 +110,38 @@ function steerToward(ant: VAnt, dx: number, dy: number, maxSpd: number, dt: numb
   }
 }
 
-function makeAnt(map: TileMap): VAnt | null {
+function roleFromType(at: AntType | null): { role: AntRole; bodyColor: string; headColor: string; legColor: string; bodyW: number; bodyH: number; surfaceChance: number; chaseRadius: number; tunnelSpdMult: number } {
+  if (!at) return { role: "generic", bodyColor: "#c87941", headColor: "#6a2a08", legColor: "#5a2808", bodyW: 6,   bodyH: 3,   surfaceChance: 0.08, chaseRadius:  80, tunnelSpdMult: 1.0  };
+  const n = at.name.toLowerCase();
+  // Name-based mapping — canonical roles matching the server seed data
+  if (n.includes("soldier")) return { role: "soldier", bodyColor: "#8b1800", headColor: "#500800", legColor: "#6a1000", bodyW: 8,   bodyH: 4,   surfaceChance: 0.12, chaseRadius: 130, tunnelSpdMult: 0.85 };
+  if (n.includes("miner"))   return { role: "worker",  bodyColor: "#4a2c0e", headColor: "#2a1206", legColor: "#3a1e08", bodyW: 7,   bodyH: 3.5, surfaceChance: 0.03, chaseRadius:  45, tunnelSpdMult: 1.40 };
+  if (n.includes("scout"))   return { role: "forager", bodyColor: "#d4c060", headColor: "#8a7820", legColor: "#b0a030", bodyW: 5,   bodyH: 2.5, surfaceChance: 0.22, chaseRadius:  60, tunnelSpdMult: 1.10 };
+  if (n.includes("worker"))  return { role: "generic", bodyColor: "#c87941", headColor: "#6a2a08", legColor: "#5a2808", bodyW: 6,   bodyH: 3,   surfaceChance: 0.08, chaseRadius:  80, tunnelSpdMult: 1.0  };
+  // Stat-based fallback for unknown types
+  const f = at.foraging, a = at.attack, m = at.mining;
+  if (a > f && a > m)  return { role: "soldier", bodyColor: "#8b1800", headColor: "#500800", legColor: "#6a1000", bodyW: 8,   bodyH: 4,   surfaceChance: 0.12, chaseRadius: 130, tunnelSpdMult: 0.85 };
+  if (m > f && m > a)  return { role: "worker",  bodyColor: "#4a2c0e", headColor: "#2a1206", legColor: "#3a1e08", bodyW: 7,   bodyH: 3.5, surfaceChance: 0.03, chaseRadius:  45, tunnelSpdMult: 1.40 };
+  if (f > m && f > a)  return { role: "forager", bodyColor: "#d4c060", headColor: "#8a7820", legColor: "#b0a030", bodyW: 5,   bodyH: 2.5, surfaceChance: 0.22, chaseRadius:  60, tunnelSpdMult: 1.10 };
+  return                       { role: "generic", bodyColor: "#c87941", headColor: "#6a2a08", legColor: "#5a2808", bodyW: 6,   bodyH: 3,   surfaceChance: 0.08, chaseRadius:  80, tunnelSpdMult: 1.0  };
+}
+
+function sampleAntType(pop: PopRec[]): AntType | null {
+  const total = pop.reduce((s, r) => s + r.population, 0);
+  if (total <= 0 || pop.length === 0) return null;
+  let rand = Math.random() * total;
+  for (const rec of pop) { rand -= rec.population; if (rand <= 0) return rec.antType; }
+  return pop[pop.length - 1].antType;
+}
+
+function makeAnt(map: TileMap, pop: PopRec[]): VAnt | null {
   const ent = findEntrance(map);
   if (!ent) return null;
   const [er, ec] = ent;
   const adj = adjOpen(map, er, ec);
   const [tr, tc] = adj.length > 0 ? adj[Math.floor(Math.random() * adj.length)] : [er, ec];
+  const at = sampleAntType(pop);
+  const v  = roleFromType(at);
   return {
     x: ec * GS + GS / 2, y: er * GS + SURFACE_H + GS / 2,
     vx: 0, vy: 0,
@@ -113,11 +150,11 @@ function makeAnt(map: TileMap): VAnt | null {
     surfaceTimer: 0,
     wanderAngle: (Math.random() - 0.5) * Math.PI,
     carrying: false,
-    color: ANT_COLORS[Math.floor(Math.random() * ANT_COLORS.length)],
     fightTimer: 0,
     phase: Math.random() * Math.PI * 2,
-    spdScale: 0.8 + Math.random() * 0.4,
+    spdScale: 0.85 + Math.random() * 0.3,
     prevRow: -1, prevCol: -1,
+    ...v,
   };
 }
 
@@ -183,9 +220,9 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
       const entrance = entraceRef.current;
 
       // Scale visual count to population (1 visual ant per 2 real ants, max 50)
-      const totalPop = useGameStore.getState().getTotalPopulation();
-      const targetCount = Math.min(Math.floor(totalPop / 2), 50);
-      while (ants.length < targetCount) { const a = makeAnt(map); if (!a) break; ants.push(a); }
+      const { getTotalPopulation, population: pop } = useGameStore.getState();
+      const targetCount = Math.min(Math.floor(getTotalPopulation() / 2), 50);
+      while (ants.length < targetCount) { const a = makeAnt(map, pop); if (!a) break; ants.push(a); }
       if (ants.length > targetCount) ants.length = targetCount;
 
       for (const ant of ants) {
@@ -203,7 +240,7 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
             ant.row = ant.tRow; ant.col = ant.tCol;
 
             const adj = adjOpen(map, ant.row, ant.col);
-            if (ant.row === 0 && Math.random() < 0.08) {
+            if (ant.row === 0 && Math.random() < ant.surfaceChance) {
               ant.state = "surface";
               ant.surfaceTimer = 9 + Math.random() * 12;
               ant.wanderAngle  = (ant.vx >= 0 ? 0 : Math.PI) + (Math.random() - 0.5) * 0.4;
@@ -222,7 +259,7 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
             const sty = ant.tRow * GS + SURFACE_H + GS / 2;
             const sdx = stx - ant.x, sdy = sty - ant.y;
             const sdist2 = sdx * sdx + sdy * sdy;
-            const spd = SPD_TUNNEL * ant.spdScale;
+            const spd = SPD_TUNNEL * ant.spdScale * ant.tunnelSpdMult;
             steerToward(ant, sdx, sdy, spd, dt, sdist2, 1);
             clampSpd(ant, spd);
             ant.x += ant.vx * dt;
@@ -248,9 +285,9 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
             ant.vy *= 0.85;
           }
 
-          // Chase nearest bug within 80px, otherwise wander
+          // Chase nearest bug within chaseRadius, otherwise wander
           let chaseBug: VBug | null = null;
-          let chaseDist2 = 80 * 80;
+          let chaseDist2 = ant.chaseRadius * ant.chaseRadius;
           for (const bug of bugs) {
             if (bug.deadTimer > 0) continue;
             const bx = bug.x - ant.x, by = bug.y - ant.y;
@@ -407,6 +444,19 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
             ctx.beginPath();
             ctx.ellipse(x + GS / 2, y + GS / 2, GS * 0.32, GS * 0.22, 0, 0, Math.PI * 2);
             ctx.fill();
+            if (tile.antTypeId !== undefined) {
+              const typeName = useGameStore.getState().antTypes.find(at => at.id === tile.antTypeId)?.name ?? "";
+              if (typeName) {
+                const abbr = typeName.slice(0, 3).toUpperCase();
+                ctx.font = `bold ${GS * 0.28}px monospace`;
+                ctx.textAlign = "left";
+                ctx.textBaseline = "top";
+                ctx.fillStyle = "#000";
+                ctx.fillText(abbr, x + 2.5, y + 2.5);
+                ctx.fillStyle = "#c4b5fd";
+                ctx.fillText(abbr, x + 2, y + 2);
+              }
+            }
           } else if (tile?.type === "tunnel") {
             ctx.fillStyle = "#1a0a05"; ctx.fillRect(x, y, GS, GS);
           } else {
@@ -458,36 +508,49 @@ function GameCanvas({ zoom, onNestClick }: GameCanvasProps) {
       // Ants
       for (const ant of antsRef.current) {
         const fighting = ant.fightTimer > 0;
-        const col = fighting ? "#ff4400" : ant.color;
+        const bCol = fighting ? "#ff4400" : ant.bodyColor;
+        const hCol = fighting ? "#ff4400" : ant.headColor;
+        const lCol = fighting ? "#cc2200" : ant.legColor;
+        const bw = ant.bodyW, bh = ant.bodyH;
         const facingRight = ant.vx >= 0;
-        const headX = ant.x + (facingRight ? 3 : -3);
+        const hOff = facingRight ? bw * 0.5 : -bw * 0.5;
         const legPhase = ant.phase * 7;
 
-        // Legs behind body
-        ctx.strokeStyle = fighting ? "#cc2200" : "#5a2808";
-        ctx.lineWidth = 0.8;
+        // Legs
+        ctx.strokeStyle = lCol;
+        ctx.lineWidth = ant.role === "soldier" ? 1.0 : 0.8;
+        const legSpread = bw * 0.22;
         for (let i = 0; i < 3; i++) {
-          const lx = ant.x + (i - 1) * 2.2;
-          const swing = Math.sin(legPhase + i * 2.1) * 2.5;
-          ctx.beginPath(); ctx.moveTo(lx, ant.y + 1); ctx.lineTo(lx - 1.5, ant.y + 1 + swing); ctx.stroke();
-          ctx.beginPath(); ctx.moveTo(lx, ant.y + 1); ctx.lineTo(lx + 1.5, ant.y + 1 - swing); ctx.stroke();
+          const lx = ant.x + (i - 1) * legSpread;
+          const swing = Math.sin(legPhase + i * 2.1) * 2.8;
+          ctx.beginPath(); ctx.moveTo(lx, ant.y + bh * 0.3); ctx.lineTo(lx - 1.5, ant.y + bh * 0.3 + swing); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(lx, ant.y + bh * 0.3); ctx.lineTo(lx + 1.5, ant.y + bh * 0.3 - swing); ctx.stroke();
         }
 
-        // Dark outline for visibility on any background
-        ctx.fillStyle = "#1a0800";
-        ctx.fillRect(ant.x - 3.5, ant.y - 2, 7, 4);
-        ctx.fillRect(headX - 2, ant.y - 2.5, 4, 4);
+        // Dark outline
+        ctx.fillStyle = "#0f0400";
+        ctx.fillRect(ant.x - bw * 0.5 - 0.5, ant.y - bh * 0.5 - 0.5, bw + 1, bh + 1);
+        ctx.fillRect(ant.x + hOff - 1.5 - 0.5, ant.y - bh * 0.5 - 1, 3 + 1, bh + 1);
 
         // Body
-        ctx.fillStyle = col;
-        ctx.fillRect(ant.x - 3, ant.y - 1.5, 6, 3);
+        ctx.fillStyle = bCol;
+        ctx.fillRect(ant.x - bw * 0.5, ant.y - bh * 0.5, bw, bh);
+
         // Head
-        ctx.fillStyle = fighting ? "#ff4400" : "#6a2a08";
-        ctx.fillRect(headX - 1.5, ant.y - 2, 3, 3);
+        ctx.fillStyle = hCol;
+        ctx.fillRect(ant.x + hOff - 1.5, ant.y - bh * 0.5 - 0.5, 3, bh + 0.5);
+
+        // Soldier mandibles
+        if (ant.role === "soldier") {
+          ctx.fillStyle = fighting ? "#ff6600" : "#6a0800";
+          const mx = ant.x + hOff + (facingRight ? 1.5 : -1.5);
+          ctx.fillRect(mx, ant.y - bh * 0.5 - 1.5, 1.5, 1.5);
+          ctx.fillRect(mx, ant.y + bh * 0.5,        1.5, 1.5);
+        }
 
         if (ant.carrying) {
           ctx.fillStyle = "#f0c040";
-          ctx.fillRect(ant.x - 2, ant.y - 5, 4, 3);
+          ctx.fillRect(ant.x - 2, ant.y - bh * 0.5 - 4, 4, 3);
         }
       }
 

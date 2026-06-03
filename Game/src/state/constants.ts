@@ -18,5 +18,5 @@ export const CAPACITY_PER_CHAMBER = 10;     // max ants a single nesting_chamber
 // Food costs for actions
 export const DIG_FOOD_COST = 10;
 export const FILL_FOOD_COST = 5;
-export const NEST_FOOD_COST = 30;
+export const NEST_FOOD_COST = 100;
 export const EGG_FOOD_COST = 5;             // food per egg recruited

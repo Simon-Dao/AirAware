@@ -74,9 +74,9 @@ print(f"Inserted {readings_added} sensor readings over 15 days (March 17–31)")
 # (name, foraging, mining, hunger_cost, attack, unlock_cost)
 ant_types = [
     ("Worker",   0.003, 0.001, 0.002,  0.001,    0),
-    ("Scout",    0.002, 0.0003, 0.0015, 0.001,  500),
+    ("Scout",    0.005, 0.0003, 0.0015, 0.001,  500),
     ("Miner",    0.001, 0.003,  0.002,  0.0003, 1000),
-    ("Soldier",  0.0007, 0.0003, 0.0025, 0.003, 2000),
+    ("Soldier",  0.0009, 0.0001, 0.003, 0.003, 2000),
 ]
 
 for name, foraging, mining, hunger_cost, attack, unlock_cost in ant_types:
